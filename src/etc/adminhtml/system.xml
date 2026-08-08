@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * This file is part of the MagePsycho_Profiler package.
+ *
+ * DISCLAIMER
+ *
+ * Do not edit or add to this file if you wish to upgrade this package
+ * to newer versions in the future.
+ *
+ * @author   Raj KB <rajkb@magepsycho.com>
+ * @license  Open Software License (OSL 3.0)
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+    <system>
+        <tab id="magepsycho" translate="label" sortOrder="200">
+            <label>MagePsycho</label>
+        </tab>
+        <section id="magepsycho_profiler" sortOrder="110" translate="label" showInDefault="1" showInWebsite="1" showInStore="1">
+            <tab>magepsycho</tab>
+            <label>Enhanced Profiler</label>
+            <resource>MagePsycho_Profiler::config</resource>
+            <group id="support" translate="label" type="text" sortOrder="0" showInDefault="1" showInWebsite="1" showInStore="1">
+                <frontend_model>MagePsycho\Profiler\Block\Adminhtml\System\Config\Form\Fieldset\Support</frontend_model>
+            </group>
+            <group id="general" translate="label" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+                <label>General Settings</label>
+                <field id="version" translate="label" type="label" sortOrder="1" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Version</label>
+                    <frontend_model>MagePsycho\Profiler\Block\Adminhtml\System\Config\Form\Field\Version</frontend_model>
+                </field>
+                <field id="enabled" translate="label comment" type="select" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Write Output</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[Kill switch for writing the report. This does <strong>not</strong> activate the profiler &mdash; activation happens during bootstrap, before this config is readable. Use <code>MAGE_PROFILER=tabular</code> (env var / cookie) or <code>bin/magento magepsycho:profiler:enable</code>.]]></comment>
+                </field>
+                <field id="log_path" translate="label comment" type="text" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Log File Path</label>
+                    <comment><![CDATA[Always confined to <code>var/log/</code> and always written with a <code>.log</code> extension &mdash; anything outside is folded back in, so the report can never land in a web-served or executable location. Default: <code>var/log/profiler_tabular.log</code>. Overridden by the <code>MAGE_PROFILER_LOG</code> env var.]]></comment>
+                    <depends>
+                        <field id="enabled">1</field>
+                    </depends>
+                </field>
+                <field id="min_time_ms" translate="label comment" type="text" sortOrder="30" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Minimum Timer Duration (ms)</label>
+                    <validate>validate-number validate-zero-or-greater</validate>
+                    <comment><![CDATA[Hide timers faster than this. <code>0</code> shows every timer. Overridden by <code>MAGE_PROFILER_MIN_MS</code>.]]></comment>
+                    <depends>
+                        <field id="enabled">1</field>
+                    </depends>
+                </field>
+                <field id="filter_pattern" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Timer Id Filter (PCRE)</label>
+                    <comment><![CDATA[Optional PCRE applied to timer ids, e.g. <code>/webapi|OBSERVER/</code>. Overridden by <code>MAGE_PROFILER_FILTER</code>.]]></comment>
+                    <depends>
+                        <field id="enabled">1</field>
+                    </depends>
+                </field>
+                <field id="cli_stderr" translate="label comment" type="select" sortOrder="50" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Print To STDERR On CLI</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <comment><![CDATA[Also print the table to the terminal after a <code>bin/magento</code> command. Overridden by <code>MAGE_PROFILER_CLI_STDERR</code>.]]></comment>
+                    <depends>
+                        <field id="enabled">1</field>
+                    </depends>
+                </field>
+            </group>
+        </section>
+    </system>
+</config>

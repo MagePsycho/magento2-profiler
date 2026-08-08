@@ -1,0 +1,8 @@
+"Profiler","Profiler"
+"Tabular Output Settings","Tabular Output Settings"
+"Write Output","Write Output"
+"Log File Path","Log File Path"
+"Minimum Timer Duration (ms)","Minimum Timer Duration (ms)"
+"Timer Id Filter (PCRE)","Timer Id Filter (PCRE)"
+"Print To STDERR On CLI","Print To STDERR On CLI"
+"Profiler Section","Profiler Section"

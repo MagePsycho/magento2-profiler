@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * This file is part of the MagePsycho_Profiler package.
+ *
+ * DISCLAIMER
+ *
+ * Do not edit or add to this file if you wish to upgrade this package
+ * to newer versions in the future.
+ *
+ * @author   Raj KB <rajkb@magepsycho.com>
+ * @license  Open Software License (OSL 3.0)
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <magepsycho_profiler>
+            <general>
+                <enabled>1</enabled>
+                <log_path>var/log/profiler_tabular.log</log_path>
+                <min_time_ms>0</min_time_ms>
+                <filter_pattern/>
+                <cli_stderr>1</cli_stderr>
+            </general>
+        </magepsycho_profiler>
+    </default>
+</config>

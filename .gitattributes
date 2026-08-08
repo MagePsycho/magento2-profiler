@@ -1,0 +1,13 @@
+# Keep the dist archive (and therefore vendor/magepsycho/magento2-profiler) to runtime files only.
+# Everything below is stripped from `git archive`, GitHub zipballs and `composer install --prefer-dist`.
+
+/docs                   export-ignore
+/tests                  export-ignore
+/dist                   export-ignore
+/.github                export-ignore
+/.gitattributes         export-ignore
+/.gitignore             export-ignore
+/.php-cs-fixer.dist.php export-ignore
+/phpstan.neon           export-ignore
+/phpstan.neon.dist      export-ignore
+/phpunit.xml.dist       export-ignore

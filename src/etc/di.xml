@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * This file is part of the MagePsycho_Profiler package.
+ *
+ * DISCLAIMER
+ *
+ * Do not edit or add to this file if you wish to upgrade this package
+ * to newer versions in the future.
+ *
+ * @author   Raj KB <rajkb@magepsycho.com>
+ * @license  Open Software License (OSL 3.0)
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!--
+        NOTE: the profiler output type itself cannot be registered here. Magento configures the
+        profiler in app/bootstrap.php before the ObjectManager exists, and
+        Magento\Framework\Profiler\Driver\Standard\Output\Factory is hard-instantiated with no DI map.
+        The `tabular` alias is resolved in MagePsycho_Profiler's bootstrap.php instead.
+    -->
+    <!--
+        SQL profiling. The adapter is built through MysqlFactory::create() -> ObjectManager::create(),
+        so it is an interceptor and even the adapter's own internal $this->query() calls (from
+        fetchAll/fetchOne/insert/update/...) are covered.
+        Controlled with MAGE_PROFILER_SQL; it costs one static isEnabled() check when profiling is off.
+    -->
+    <type name="Magento\Framework\DB\Adapter\Pdo\Mysql">
+        <plugin name="magepsycho_profiler_sql" type="MagePsycho\Profiler\Plugin\Db\QueryProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Indexer + Mview: turns `bin/magento indexer:reindex` from a wall of SQL into per-indexer totals.
+        Declared on the concrete Indexer, NOT on IndexerInterface: Indexer\DependencyDecorator also
+        implements the interface and delegates to Indexer, so an interface plugin fires twice and each
+        indexer appears nested inside a duplicate of itself. Indexers that the decorator triggers as
+        dependencies run through their own Indexer instance, so nothing is lost.
+    -->
+    <type name="Magento\Indexer\Model\Indexer">
+        <plugin name="magepsycho_profiler_indexer" type="MagePsycho\Profiler\Plugin\Indexer\IndexerProfiler" sortOrder="10"/>
+    </type>
+    <type name="Magento\Framework\Mview\ActionInterface">
+        <plugin name="magepsycho_profiler_mview" type="MagePsycho\Profiler\Plugin\Indexer\MviewActionProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Root timer for CLI runs. Under php-fpm everything nests below App\Bootstrap::run()'s `magento`
+        timer; bin/magento has no equivalent, so without this a CLI profile is a flat list of roots.
+        Attached to the Symfony command, not to Magento\Framework\Console\Cli: bin/magento line 22 builds
+        the Cli with a plain `new`, so it is never an interceptor. Commands come from CommandList via the
+        ObjectManager and are.
+    -->
+    <type name="Symfony\Component\Console\Command\Command">
+        <plugin name="magepsycho_profiler_cli" type="MagePsycho\Profiler\Plugin\Console\CliProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Session persistence: on a Redis backend the read blocks on the session lock. -->
+    <type name="Magento\Framework\Session\SaveHandler">
+        <plugin name="magepsycho_profiler_session" type="MagePsycho\Profiler\Plugin\Session\SaveHandlerProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Search, on the interface: Elasticsearch, OpenSearch, MySQL and third-party engines alike. -->
+    <type name="Magento\Framework\Search\AdapterInterface">
+        <plugin name="magepsycho_profiler_search" type="MagePsycho\Profiler\Plugin\Search\AdapterProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Outbound HTTP. Host only - query strings carry API keys. -->
+    <type name="Magento\Framework\HTTP\Client\Curl">
+        <plugin name="magepsycho_profiler_http_curl" type="MagePsycho\Profiler\Plugin\Http\CurlProfiler" sortOrder="10"/>
+    </type>
+    <type name="Magento\Framework\HTTP\AsyncClientInterface">
+        <plugin name="magepsycho_profiler_http_async" type="MagePsycho\Profiler\Plugin\Http\AsyncClientProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Cache backends are built by Zend_Cache::factory(), never by the ObjectManager, so they cannot be
+        intercepted. A frontend decorator is the only way in. Appended last, so it is the outermost
+        decorator and measures what the application actually pays per cache operation.
+    -->
+    <type name="Magento\Framework\App\Cache\Frontend\Factory">
+        <arguments>
+            <argument name="decorators" xsi:type="array">
+                <item name="magepsycho_profiler" xsi:type="array">
+                    <item name="class" xsi:type="string">MagePsycho\Profiler\Model\Cache\ProfilerDecorator</item>
+                </item>
+            </argument>
+        </arguments>
+    </type>
+
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="magepsycho_profiler_enable" xsi:type="object">MagePsycho\Profiler\Console\Command\EnableCommand</item>
+                <item name="magepsycho_profiler_disable" xsi:type="object">MagePsycho\Profiler\Console\Command\DisableCommand</item>
+                <item name="magepsycho_profiler_status" xsi:type="object">MagePsycho\Profiler\Console\Command\StatusCommand</item>
+            </argument>
+        </arguments>
+    </type>
+
+</config>

@@ -1,0 +1,25 @@
+#
+# Static analysis config for MagePsycho_Profiler.
+#
+# Run from the Magento root:
+#   vendor/bin/phpstan analyse -c app/code/MagePsycho/Profiler/phpstan.neon --memory-limit=1G
+#
+parameters:
+    level: 8
+    paths:
+        - .
+    bootstrapFiles:
+        - ../../../../vendor/autoload.php
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        # BP is defined by app/autoload.php at runtime, which is not part of the analysed set.
+        # Every use of it in this module is already guarded by defined('BP').
+        - '#Constant BP not found#'
+
+        # Upstream docblock bug: Magento\Framework\Profiler\Driver\Standard\Stat::start()/stop()
+        # document "@param int $time", but Magento's own driver passes microtime(true) - a float -
+        # at vendor/magento/framework/Profiler/Driver/Standard/Standard.php:169,180. The tests feed
+        # the same float values the real driver does.
+        -
+            message: '#\$time of method Magento\\Framework\\Profiler\\Driver\\Standard\\Stat::(start|stop)\(\) expects int, float given#'
+            path: Test/Unit/Model/Profiler/Output/TabularTest.php

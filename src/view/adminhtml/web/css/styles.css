@@ -1,0 +1,44 @@
+/**
+ * This file is part of the MagePsycho_Profiler package.
+ *
+ * DISCLAIMER
+ *
+ * Do not edit or add to this file if you wish to upgrade this package
+ * to newer versions in the future.
+ *
+ * @author   Raj KB <rajkb@magepsycho.com>
+ * @license  Open Software License (OSL 3.0)
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+/* System Configuration */
+.config-nav .magepsycho-extensions .admin__page-nav-title::before {
+    content: '';
+    background-image: url(../images/logo-min.svg);
+    background-repeat: no-repeat;
+    background-size: auto 19px;
+    background-position: 0 0;
+    height: 19px;
+    width: 19px;
+    position: absolute;
+    top: 17px;
+    left: 14px;
+}
+.config-nav .magepsycho-extensions .admin__page-nav-title strong {
+    margin-left: 20px;
+}
+
+/* Menu */
+ul[role="menu"] [data-ui-id^="menu-magepsycho-profilerui-viewer"] a > span:after {
+    content: '';
+    background: url(../images/logo-min-grey.svg) left 50% no-repeat;
+    background-size: auto 22px;
+    background-position: 0 0;
+    height: 22px;
+    width: 22px;
+    margin-right: 3px;
+    margin-left: 5px;
+    display: inline-block;
+    vertical-align: middle;
+}

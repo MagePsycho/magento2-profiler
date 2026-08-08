@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * This file is part of the MagePsycho_Profiler package.
+ *
+ * DISCLAIMER
+ *
+ * Do not edit or add to this file if you wish to upgrade this package
+ * to newer versions in the future.
+ *
+ * @author   Raj KB <rajkb@magepsycho.com>
+ * @license  Open Software License (OSL 3.0)
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Module/etc/module.xsd">
+    <module name="MagePsycho_Profiler" setup_version="1.0.0">
+        <sequence>
+            <module name="Magento_Config"/>
+        </sequence>
+    </module>
+</config>
