@@ -143,6 +143,18 @@ The `json` output writes one file per run into `var/log/profiler/`, indexed by `
 
 Install the companion [**MagePsycho_ProfilerUi**](../ProfilerUi/README.md) for an admin page at *System → Tools → Enhanced Profiler Reports*: a collapsible tree, a sortable and filterable table with the Self column heat-shaded, and a timeline of every call. It only reads what this module writes and adds nothing to the recording side, so it can be left uninstalled in production.
 
+The same run, read in the browser instead of the log — this is what you get once `MagePsycho_ProfilerUi` is installed:
+
+<div align="center">
+
+![The admin viewer added by MagePsycho_ProfilerUi — collapsible tree with the Self column heat-shaded](./docs/enhanced-profiler-tree-view.png)
+
+</div>
+
+```
+composer require magepsycho/magento2-profiler-ui
+```
+
 ### Instrument Your Own Code
 
 ```php
