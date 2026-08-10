@@ -15,7 +15,7 @@
 </div>
 
 ## Overview
-[Magento 2 Enhanced Profiler](https://www.magepsycho.com/magento2-profiler.html) adds a **`tabular`** and a **`json`** profiler output type to Magento 2 — a third and fourth option next to the built-in `html` and `csvfile`.
+**Magento 2 Enhanced Profiler adds** a **`tabular`** and a **`json`** profiler output type to Magento 2 — a third and fourth option next to the built-in `html` and `csvfile`.
 
 It profiles **all three request types from one switch**: storefront and admin **web** requests, **REST and GraphQL API** requests, and **CLI** commands. The last two stock Magento cannot profile at all — `html` writes into the response body, which is useless for JSON endpoints and impossible for a console command. On web requests this writes to a log file instead of appending a table to the page.
 
@@ -58,7 +58,7 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * Log output is confined to `var/log/` and forced to a `.log` extension, so a report can never land somewhere web-served or executable
 * Cookie activation is gated behind developer mode or a shared secret
 * `Benchmark` helper for instrumenting your own code in a few lines
-* Companion [**MagePsycho_ProfilerUi**](../ProfilerUi/README.md) renders the reports in the admin
+* Companion [**MagePsycho_ProfilerUi**](https://github.com/MagePsycho/magento2-profiler-ui) renders the reports in the admin
 
 ## Feature Highlights
 
@@ -80,7 +80,7 @@ Run either, or both together as `MAGE_PROFILER=tabular,json`:
 | Type | Writes | Use |
 |---|---|---|
 | `tabular` | ASCII table appended to `var/log/profiler_tabular.log` | Reading in a terminal; STDERR on CLI |
-| `json` (= `timeline`) | one structured file per run in `var/log/profiler/` | The [admin viewer](../ProfilerUi/README.md), CI diffing, tooling |
+| `json` (= `timeline`) | one structured file per run in `var/log/profiler/` | The [admin viewer](https://github.com/MagePsycho/magento2-profiler-ui), CI diffing, tooling |
 
 `json` and `timeline` are two names for the same capture — aggregate `rows` **and** per-call `spans`. Set `MAGE_PROFILER_MAX_SPANS=0` for an aggregate-only file.
 
@@ -141,7 +141,7 @@ MAGE_PROFILER=tabular MAGE_PROFILER_SQL=0 bin/magento indexer:reindex
 
 The `json` output writes one file per run into `var/log/profiler/`, indexed by `index.jsonl` so a run picker can be built without opening every report.
 
-Install the companion [**MagePsycho_ProfilerUi**](../ProfilerUi/README.md) for an admin page at *System → Tools → Enhanced Profiler Reports*: a collapsible tree, a sortable and filterable table with the Self column heat-shaded, and a timeline of every call. It only reads what this module writes and adds nothing to the recording side, so it can be left uninstalled in production.
+Install the companion [**MagePsycho_ProfilerUi**](https://github.com/MagePsycho/magento2-profiler-ui) for an admin page at *System → Tools → Enhanced Profiler Reports*: a collapsible tree, a sortable and filterable table with the Self column heat-shaded, and a timeline of every call. It only reads what this module writes and adds nothing to the recording side, so it can be left uninstalled in production.
 
 The same run, read in the browser instead of the log — this is what you get once `MagePsycho_ProfilerUi` is installed:
 
