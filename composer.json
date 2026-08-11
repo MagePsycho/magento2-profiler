@@ -2,7 +2,7 @@
   "name": "magepsycho/magento2-profiler",
   "description": "Tabular profiler output type for API & CLI request profiling",
   "type": "magento2-module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "authors": [
     {
       "name": "Raj KB",

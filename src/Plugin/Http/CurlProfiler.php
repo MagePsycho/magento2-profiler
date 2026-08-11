@@ -34,6 +34,8 @@ use MagePsycho\Profiler\Model\Instrumentation\TimerId;
  * the report is appended to a log file that outlives the request.
  *
  * The public get()/post() pair is the hook point: makeRequest() is protected and cannot be intercepted.
+ * Nothing is lost by that - both public methods delegate straight to it, and no non-test subclass adds
+ * another verb.
  */
 class CurlProfiler
 {

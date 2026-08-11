@@ -115,6 +115,45 @@ class TimerId
     }
 
     /**
+     * Collapse a search index reference to a label that repeats across runs.
+     *
+     * The write path targets a versioned physical index - magento2_product_1_v37 - whose suffix
+     * increments on every full reindex (Elasticsearch\Model\Adapter\Index\IndexNameResolver). Left raw,
+     * each reindex mints a fresh id and eats into the per-prefix cap, so the suffix is folded to _v*.
+     * The read path uses the unversioned alias and passes through untouched.
+     *
+     * @param string|string[]|null $index One index, a list, or a comma-joined list.
+     * @return string|null Null when there is nothing to report, so no parentheses are rendered.
+     */
+    public function indexName($index): ?string
+    {
+        if (is_string($index)) {
+            $index = explode(',', $index);
+        }
+
+        if (!is_array($index)) {
+            return null;
+        }
+
+        $names = [];
+        foreach ($index as $name) {
+            $name = $this->sanitize(trim((string)$name));
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+
+        if (!$names) {
+            return null;
+        }
+
+        $label = (string)preg_replace('/_v\d+$/', '_v*', $names[0]);
+        $extra = count($names) - 1;
+
+        return $extra > 0 ? $label . ' +' . $extra : $label;
+    }
+
+    /**
      * Reduce a URL to its host. Query strings routinely carry tokens and must never be recorded.
      *
      * @param string $url

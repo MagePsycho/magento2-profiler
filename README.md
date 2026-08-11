@@ -52,6 +52,7 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * Two output types that can run together: `tabular` (ASCII log) and `json` / `timeline` (structured per-run files)
 * Captures aggregate rows **and** per-call spans, so a timeline is available without deciding before the run
 * **SQL query profiling** on by default, with a per-table breakdown of every query
+* **OpenSearch profiling** per operation and index, covering the reindex path the search adapter never sees
 * Times DB, search, HTTP clients, GraphQL resolvers, Web API, indexers, mview, session handler, cache frontend and console commands
 * Thresholds default to **zero** — core's `html` output hides everything under 1ms / 10 calls / 10KB, which drops most of an API request
 * Filter noise by minimum duration or by PCRE on the timer id
@@ -135,6 +136,38 @@ MAGE_PROFILER=tabular MAGE_PROFILER_SQL=operation bin/magento indexer:reindex
 
 # off, without touching the rest of the profiler
 MAGE_PROFILER=tabular MAGE_PROFILER_SQL=0 bin/magento indexer:reindex
+```
+
+### Search Engine Profiling
+
+Two layers. `SEARCH:` times the search adapter, so a storefront request shows which container was queried. `OPENSEARCH:` times the OpenSearch client underneath it — which index, which operation, how big the indexing batches were. The write path never goes through the adapter, so without the second layer a `catalogsearch_fulltext` reindex looks like pure SQL:
+
+```
+CLI:indexer:reindex
+ |- INDEXER:catalogsearch_fulltext::reindexAll
+     |- OPENSEARCH:indexExists (magento2_product_1_v*)
+     |- OPENSEARCH:createIndex (magento2_product_1_v*)
+     |- OPENSEARCH:addFieldsMapping (magento2_product_1_v*)
+     |- OPENSEARCH:bulkQuery (magento2_product_1_v* x100)   Cnt 12
+     |- OPENSEARCH:updateAlias (magento2_product_1)
+     |- OPENSEARCH:deleteIndex (magento2_product_1_v*)
+
+magento
+ |- SEARCH:SearchAdapter\Adapter (quick_search_container)
+     |- OPENSEARCH:query (magento2_product_1)
+```
+
+Reads report the alias; writes target a physical index whose version increments on every full reindex, so `magento2_product_1_v37` is folded to `magento2_product_1_v*` — otherwise each run would add a permanent new row and eat into the per-prefix id cap. Bulk batches carry their size snapped to a power of ten (`x100`, `x1k`), which keeps the id count small while making batch cost readable straight off the Cnt / Time / Avg columns. A response that timed out, lost a shard, or reported bulk errors opens a nested zero-duration `OPENSEARCH:query:degraded` / `OPENSEARCH:bulkQuery:errors` marker, whose Cnt is the failure count.
+
+```bash
+# what does a catalogsearch reindex actually spend its time on?
+MAGE_PROFILER=tabular MAGE_PROFILER_FILTER='/SEARCH/' bin/magento indexer:reindex catalogsearch_fulltext
+
+# operations only, no index names
+MAGE_PROFILER=tabular MAGE_PROFILER_SEARCH=operation bin/magento indexer:reindex
+
+# both search layers off
+MAGE_PROFILER=tabular MAGE_PROFILER_SEARCH=0 bin/magento indexer:reindex
 ```
 
 ### Timeline And The Admin Viewer
@@ -222,7 +255,7 @@ These control the **output** only — they cannot switch profiling on. Environme
 | Timer Id Filter (PCRE) | `MAGE_PROFILER_FILTER` | none |
 | Print To STDERR On CLI | `MAGE_PROFILER_CLI_STDERR` | Yes |
 
-Instrumentation itself is environment-only: `MAGE_PROFILER_SQL`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
+Instrumentation itself is environment-only: `MAGE_PROFILER_SQL`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
 
 ## Security
 
@@ -245,7 +278,7 @@ The report path is **always confined to `var/log/`** and always written with a `
 
 ### What gets instrumented
 
-Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
 
 ### Static analysis
 
@@ -254,9 +287,14 @@ vendor/bin/phpstan analyse -c app/code/MagePsycho/Profiler/phpstan.neon --memory
 vendor/bin/phpcs --standard=Magento2 --extensions=php,phtml app/code/MagePsycho/Profiler/
 ```
 
-Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin and the benchmark helper.
+Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin, the OpenSearch client plugin and the benchmark helper.
 
 ## Changelog
+
+**Version 1.0.1 (2026-08-11)**
+
+* OpenSearch client profiling: per-operation, per-index timers covering the search **and** the reindex path, with versioned index names folded and bulk batch sizes bucketed.
+* Unit coverage for the curl client plugin.
 
 **Version 1.0.0 (2026-08-08)**
 

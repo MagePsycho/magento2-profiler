@@ -19,6 +19,7 @@ namespace MagePsycho\Profiler\Test\Unit\Model\Instrumentation;
 
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 class TimerIdTest extends TestCase
@@ -172,6 +173,7 @@ class TimerIdTest extends TestCase
      * @return void
      * @dataProvider shortClassDataProvider
      */
+    #[DataProvider('shortClassDataProvider')]
     public function testShortClass(string $class, int $segments, string $expected): void
     {
         $this->assertSame($expected, $this->create()->shortClass($class, $segments));
@@ -210,6 +212,7 @@ class TimerIdTest extends TestCase
      * @return void
      * @dataProvider hostDataProvider
      */
+    #[DataProvider('hostDataProvider')]
     public function testHostNeverLeaksTheQueryString(string $url, string $expected): void
     {
         $this->assertSame($expected, $this->create()->host($url));
@@ -229,6 +232,43 @@ class TimerIdTest extends TestCase
             'with port' => ['http://localhost:8080/ping', 'localhost'],
             'relative path keeps no query' => ['/local/endpoint?token=SECRET', '/local/endpoint'],
             'empty' => ['', 'unknown'],
+        ];
+    }
+
+    /**
+     * The versioned suffix changes on every reindex, so it must not reach the id.
+     *
+     * @param string|string[]|null $index
+     * @param string|null $expected
+     * @return void
+     * @dataProvider indexNameDataProvider
+     */
+    #[DataProvider('indexNameDataProvider')]
+    public function testIndexNameFoldsTheReindexVersion($index, ?string $expected): void
+    {
+        $this->assertSame($expected, $this->create()->indexName($index));
+    }
+
+    /**
+     * @return array<string, array{0: string|string[]|null, 1: string|null}>
+     */
+    public static function indexNameDataProvider(): array
+    {
+        return [
+            'alias passes through' => ['magento2_product_1', 'magento2_product_1'],
+            'versioned index is folded' => ['magento2_product_1_v37', 'magento2_product_1_v*'],
+            'high version is folded the same' => ['magento2_product_1_v1204', 'magento2_product_1_v*'],
+            'a version mid-name is left alone' => ['magento2_v2_product_1', 'magento2_v2_product_1'],
+            'list reports the first and a count' => [
+                ['magento2_product_1_v3', 'magento2_product_2_v3'],
+                'magento2_product_1_v* +1',
+            ],
+            'comma joined list' => ['magento2_product_1,magento2_product_2', 'magento2_product_1 +1'],
+            'blank entries are ignored' => [['', 'magento2_product_1'], 'magento2_product_1'],
+            'nesting separator is stripped' => ['weird->index', 'weird_index'],
+            'empty string' => ['', null],
+            'empty list' => [[], null],
+            'null' => [null, null],
         ];
     }
 

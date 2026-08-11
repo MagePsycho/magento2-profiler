@@ -68,6 +68,21 @@
         <plugin name="magepsycho_profiler_search" type="MagePsycho\Profiler\Plugin\Search\AdapterProfiler" sortOrder="10"/>
     </type>
 
+    <!--
+        The OpenSearch client, one level below the adapter: which index, which operation, how big the
+        indexing batches are. The adapter above only sees reads, so this is the only view of the write
+        path - without it a catalogsearch_fulltext reindex looks like pure SQL.
+        Declared on SearchClient, not on the OpenSearch subclass: ClientFactory picks between the two
+        depending on isClientOpenSearchV2(), and a plugin on a parent class is inherited by the child,
+        so one declaration covers both. The client is built through ObjectManager::create()
+        (AdvancedSearch/Model/Client/ClientFactory.php), so it really is an interceptor. Declaring a
+        <type> for a class the install does not have is inert, so this stays safe on Elasticsearch.
+        Shares MAGE_PROFILER_SEARCH with the adapter above; `operation` drops the index detail.
+    -->
+    <type name="Magento\OpenSearch\Model\SearchClient">
+        <plugin name="magepsycho_profiler_opensearch" type="MagePsycho\Profiler\Plugin\Search\OpenSearchClientProfiler" sortOrder="10"/>
+    </type>
+
     <!-- Outbound HTTP. Host only - query strings carry API keys. -->
     <type name="Magento\Framework\HTTP\Client\Curl">
         <plugin name="magepsycho_profiler_http_curl" type="MagePsycho\Profiler\Plugin\Http\CurlProfiler" sortOrder="10"/>
