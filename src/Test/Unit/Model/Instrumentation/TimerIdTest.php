@@ -273,6 +273,81 @@ class TimerIdTest extends TestCase
     }
 
     /**
+     * Cache ids are per-entity by nature, so the family is what reaches the report.
+     *
+     * @param string|string[]|null $key
+     * @param string|null $expected
+     * @return void
+     * @dataProvider cacheKeyDataProvider
+     */
+    #[DataProvider('cacheKeyDataProvider')]
+    public function testCacheKeyIsReducedToItsFamily($key, ?string $expected): void
+    {
+        $this->assertSame($expected, $this->create()->cacheKey($key));
+    }
+
+    /**
+     * @return array<string, array{0: string|string[]|null, 1: string|null}>
+     */
+    public static function cacheKeyDataProvider(): array
+    {
+        return [
+            'block with a hash' => [
+                'CUSTOM_BLOCK_0D87A51464C6F9125A87EFE3526625352CD9E150',
+                'CUSTOM_BLOCK',
+            ],
+            'entity id is dropped' => ['CAT_P_828', 'CAT_P'],
+            'tag set key' => ['cache:tags:69d_CAT_P_828', 'CAT_P'],
+            'storage prefix is dropped' => ['69d_:SCOPES_CONFIG', 'SCOPES_CONFIG'],
+            /* Eight hex characters is the threshold; real Magento hashes are 32 or 40. */
+            'a short hex token is not treated as a hash' => ['CUSTOM_BLOCK_0D87A5', 'CUSTOM_BLOCK_0D87A5'],
+            'three tokens at most' => [
+                'EAV_ENTITY_ATTRIBUTES_CATALOG_PRODUCT_0_PRELOAD',
+                'EAV_ENTITY_ATTRIBUTES',
+            ],
+            'hyphen separated ids split too' => [
+                '796DDF135ED74BDC08A634F3F19FB07D-9-FINAL_PRICE-LIST-CATEGORY-PAGE',
+                '<hash>',
+            ],
+            'a bare hash has no family' => ['94E827D0C90C25DAD205B04A3BEFD99DA3CAE04E', '<hash>'],
+            'a word that looks like hex is kept' => ['DECADE_CONFIG', 'DECADE_CONFIG'],
+            'list reports the first and a count' => [['CAT_P_1', 'CAT_P_2'], 'CAT_P +1'],
+            'empty string' => ['', null],
+            'null' => [null, null],
+        ];
+    }
+
+    /**
+     * The opt-in escape hatch keeps the id, minus the storage prefix.
+     *
+     * @return void
+     */
+    public function testRawModeKeepsTheKey(): void
+    {
+        $this->assertSame(
+            'CUSTOM_BLOCK_0D87A51464C6F9125A87EFE3526625352CD9E150',
+            $this->create()->cacheKey('69d_:CUSTOM_BLOCK_0D87A51464C6F9125A87EFE3526625352CD9E150', true)
+        );
+    }
+
+    /**
+     * A long raw key still goes through build(), which truncates it - the report must never carry a
+     * 200-character id.
+     *
+     * @return void
+     */
+    public function testRawKeysAreTruncatedByBuild(): void
+    {
+        putenv('MAGE_PROFILER_MAX_DETAIL=20');
+        $timerId = $this->create();
+
+        $id = $timerId->build('REDIS', 'load', $timerId->cacheKey(str_repeat('LONG_KEY_', 20), true));
+
+        $this->assertSame('REDIS:load (...ONG_KEY_LONG_KEY_)', $id);
+        $this->assertSame(20, strlen('...ONG_KEY_LONG_KEY_'), 'The rendered detail must honour MAX_DETAIL');
+    }
+
+    /**
      * @return TimerId
      */
     private function create(): TimerId

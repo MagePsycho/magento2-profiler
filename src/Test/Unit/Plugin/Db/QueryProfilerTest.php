@@ -26,6 +26,7 @@ use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
 use MagePsycho\Profiler\Plugin\Db\QueryProfiler;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 class QueryProfilerTest extends TestCase
@@ -58,6 +59,7 @@ class QueryProfilerTest extends TestCase
      * @return void
      * @dataProvider statementDataProvider
      */
+    #[DataProvider('statementDataProvider')]
     public function testTimerIdForRawStatements(string $sql, string $expected): void
     {
         $this->registerDriver();
@@ -195,6 +197,77 @@ class QueryProfilerTest extends TestCase
     }
 
     /**
+     * A derived table carries a nested Select in tableName. Casting that to a string yields the whole
+     * subquery - bound values included - which used to produce ids like
+     * "SQL:SELECT (..., 141)) AND (`store_id` IN (1, 0)))": one row per parameter set, and query text
+     * in the log. The alias is what repeats across calls, so the alias is what gets reported.
+     *
+     * @return void
+     */
+    public function testDerivedTableIsReportedByItsAlias(): void
+    {
+        $this->registerDriver();
+
+        $subselect = $this->createMock(Select::class);
+        $subselect->method('__toString')->willReturn('SELECT ... WHERE (entity_id IN (139, 141))');
+
+        $select = $this->createMock(Select::class);
+        $select->method('getPart')->willReturn([
+            'main_table' => ['joinType' => Select::FROM, 'tableName' => $subselect],
+        ]);
+
+        $this->runPlugin($select);
+
+        $this->assertSame(['SQL:SELECT (main_table)'], $this->startedIds);
+    }
+
+    /**
+     * Zend numbers correlations when the query gives no alias, and a number names nothing.
+     *
+     * @return void
+     */
+    public function testDerivedTableWithoutAnAliasIsMarkedAsASubquery(): void
+    {
+        $this->registerDriver();
+
+        $select = $this->createMock(Select::class);
+        $select->method('getPart')->willReturn([
+            0 => ['joinType' => Select::FROM, 'tableName' => $this->createMock(Select::class)],
+        ]);
+
+        $this->runPlugin($select);
+
+        $this->assertSame(['SQL:SELECT (<subquery>)'], $this->startedIds);
+    }
+
+    /**
+     * Two calls of the same query with different bound ids must stay one row.
+     *
+     * @return void
+     */
+    public function testDerivedTablesDoNotMultiplyRows(): void
+    {
+        $this->registerDriver();
+
+        foreach ([141, 143, 156] as $entityId) {
+            $subselect = $this->createMock(Select::class);
+            $subselect->method('__toString')->willReturn('SELECT ... (entity_id IN (' . $entityId . '))');
+
+            $select = $this->createMock(Select::class);
+            $select->method('getPart')->willReturn([
+                'main_table' => ['joinType' => Select::FROM, 'tableName' => $subselect],
+            ]);
+
+            $this->runPlugin($select);
+        }
+
+        $this->assertSame(
+            ['SQL:SELECT (main_table)', 'SQL:SELECT (main_table)', 'SQL:SELECT (main_table)'],
+            $this->startedIds
+        );
+    }
+
+    /**
      * Long names are cut from the front so the distinguishing tail survives.
      *
      * @return void
@@ -232,6 +305,7 @@ class QueryProfilerTest extends TestCase
      * @return void
      * @dataProvider offValueDataProvider
      */
+    #[DataProvider('offValueDataProvider')]
     public function testOffModeRecordsNothing(string $value): void
     {
         putenv('MAGE_PROFILER_SQL=' . $value);

@@ -47,6 +47,24 @@ class QueryProfiler
     private const MODE_OPERATION = 'operation';
 
     /**
+     * What a stringified query has and a table name never does: whitespace, parentheses, quoting.
+     *
+     * Deliberately not an identifier whitelist - a legacy or third-party table may be named in ways
+     * MySQL only accepts quoted, and reporting it is better than hiding it behind an alias.
+     */
+    private const NOT_A_TABLE_NAME = '/[\s()`\'"]/';
+
+    /**
+     * Longest plausible table name; MySQL stops at 64 characters.
+     */
+    private const MAX_TABLE_NAME = 64;
+
+    /**
+     * Reported in place of a stringified subquery.
+     */
+    private const SUBQUERY = '<subquery>';
+
+    /**
      * Leading keyword of the statement.
      */
     private const OPERATION_PATTERN = '/^\s*\(?\s*('
@@ -200,7 +218,7 @@ class QueryProfiler
         $primary  = null;
         $fallback = null;
         foreach ($from as $correlation => $part) {
-            $name = is_array($part) && isset($part['tableName']) ? (string)$part['tableName'] : (string)$correlation;
+            $name = $this->tableLabel($correlation, $part);
 
             $fallback = $fallback ?? $name;
             if (is_array($part) && ($part['joinType'] ?? '') === Select::FROM) {
@@ -216,6 +234,51 @@ class QueryProfiler
         }
 
         return $this->withJoinCount($primary, count($from) - 1);
+    }
+
+    /**
+     * The name to report for one entry of the FROM part.
+     *
+     * A derived table - SELECT ... FROM (SELECT ...) AS main_table - carries a nested Select or a
+     * Zend_Db_Expr in `tableName`, and casting that to a string yields the entire subquery, bound
+     * values and all. That produced ids like "SQL:SELECT (..., 141)) AND (`store_id` IN (1, 0)))":
+     * unreadable, different for every parameter set - one row per entity, the failure this module
+     * exists to prevent - and query fragments written into a log file.
+     *
+     * The alias is the useful name there: it is what the developer called the derived table, and it
+     * repeats across calls. Only when no usable alias exists does this fall back to a marker.
+     *
+     * @param int|string $correlation
+     * @param mixed $part
+     * @return string
+     */
+    private function tableLabel($correlation, $part): string
+    {
+        $name = is_array($part) && isset($part['tableName']) ? $part['tableName'] : null;
+
+        if ($this->isTableName($name)) {
+            return (string)$name;
+        }
+
+        /* Numeric keys are Zend's positional correlation names, not something a human chose. */
+        if (is_string($correlation) && $this->isTableName($correlation)) {
+            return $correlation;
+        }
+
+        return self::SUBQUERY;
+    }
+
+    /**
+     * @param mixed $value
+     * @return bool
+     */
+    private function isTableName($value): bool
+    {
+        if (!is_string($value) || $value === '' || strlen($value) > self::MAX_TABLE_NAME) {
+            return false;
+        }
+
+        return !preg_match(self::NOT_A_TABLE_NAME, $value);
     }
 
     /**

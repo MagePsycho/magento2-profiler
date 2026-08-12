@@ -92,6 +92,49 @@
     </type>
 
     <!--
+        The other curl client: Adapter\Curl is the Zend_Http_Client transport, which is what payment and
+        shipping gateways use. Timed on read(), where the network wait is - write() only hands the
+        request over. Shares MAGE_PROFILER_HTTP with the two above.
+    -->
+    <type name="Magento\Framework\HTTP\Adapter\Curl">
+        <plugin name="magepsycho_profiler_http_adapter" type="MagePsycho\Profiler\Plugin\Http\CurlAdapterProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Built-in full page cache. Inert behind Varnish, which is itself worth seeing. MAGE_PROFILER_FPC. -->
+    <type name="Magento\Framework\App\PageCache\Kernel">
+        <plugin name="magepsycho_profiler_fpc" type="MagePsycho\Profiler\Plugin\Cache\PageCacheProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Lock waits are dead time that shows up nowhere else: no query, no cache call, just a request
+        queued behind another process. MAGE_PROFILER_LOCK.
+    -->
+    <type name="Magento\Framework\Lock\LockManagerInterface">
+        <plugin name="magepsycho_profiler_lock" type="MagePsycho\Profiler\Plugin\Lock\LockManagerProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Transactional mail is sent inside the request that triggered it. MAGE_PROFILER_MAIL. -->
+    <type name="Magento\Framework\Mail\TransportInterface">
+        <plugin name="magepsycho_profiler_mail" type="MagePsycho\Profiler\Plugin\Mail\TransportProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Thumbnail generation on the first uncached category view. MAGE_PROFILER_IMAGE. -->
+    <type name="Magento\Framework\Image\Adapter\AdapterInterface">
+        <plugin name="magepsycho_profiler_image" type="MagePsycho\Profiler\Plugin\Image\AdapterProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Both ends of the queue. Consumers are long-running CLI processes, the workload most worth
+        profiling and the one with nothing to attribute its SQL to today. MAGE_PROFILER_QUEUE.
+    -->
+    <type name="Magento\Framework\MessageQueue\PublisherInterface">
+        <plugin name="magepsycho_profiler_queue_publish" type="MagePsycho\Profiler\Plugin\MessageQueue\QueueProfiler" sortOrder="10"/>
+    </type>
+    <type name="Magento\Framework\MessageQueue\ConsumerInterface">
+        <plugin name="magepsycho_profiler_queue_consume" type="MagePsycho\Profiler\Plugin\MessageQueue\QueueProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
         Cache backends are built by Zend_Cache::factory(), never by the ObjectManager, so they cannot be
         intercepted. A frontend decorator is the only way in. Appended last, so it is the outermost
         decorator and measures what the application actually pays per cache operation.

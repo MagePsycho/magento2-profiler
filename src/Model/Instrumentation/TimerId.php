@@ -42,6 +42,11 @@ class TimerId
      */
     public const DEFAULT_MAX_DETAIL_LENGTH = 40;
 
+    /**
+     * Leading tokens kept when reducing a cache key to its family.
+     */
+    private const FAMILY_TOKENS = 3;
+
     private const ENV_LIMIT      = 'MAGE_PROFILER_MAX_IDS';
     private const ENV_MAX_DETAIL = 'MAGE_PROFILER_MAX_DETAIL';
 
@@ -151,6 +156,95 @@ class TimerId
         $extra = count($names) - 1;
 
         return $extra > 0 ? $label . ' +' . $extra : $label;
+    }
+
+    /**
+     * Reduce a cache key to the family it belongs to: CUSTOM_BLOCK_0D87A5... -> CUSTOM_BLOCK.
+     *
+     * Raw cache ids are per-entity by nature - CAT_P_828, LAYOUT_..._4AB40B71..., bare SHA1s - and an id
+     * per entity is the one thing this class exists to prevent: it produces a report with one row per
+     * product, blows the per-prefix cap within a single page, and writes identifiers into a log file
+     * that outlives the request. The family answers the useful question (which *kind* of key costs the
+     * time) and stays bounded at a few dozen values.
+     *
+     * $raw is the escape hatch for debugging one specific key, and is documented as such: it reinstates
+     * exactly the cardinality and disclosure problems described above.
+     *
+     * @param string|string[]|null $key One key, or the list handed to a multi-key command.
+     * @param bool $raw Keep the key as-is, minus the storage prefix.
+     * @return string|null
+     */
+    public function cacheKey($key, bool $raw = false): ?string
+    {
+        if (is_array($key)) {
+            $extra = count($key) - 1;
+            $first = $this->cacheKey(reset($key) ?: null, $raw);
+
+            if ($first === null) {
+                return null;
+            }
+
+            return $extra > 0 ? $first . ' +' . $extra : $first;
+        }
+
+        if (!is_string($key) || trim($key) === '') {
+            return null;
+        }
+
+        $key = $this->stripStoragePrefix(trim($key));
+
+        return $raw ? $this->sanitize($key) : $this->keyFamily($key);
+    }
+
+    /**
+     * The leading tokens that are not an id: entity ids, hashes and store numbers are dropped.
+     *
+     * @param string $key
+     * @return string
+     */
+    private function keyFamily(string $key): string
+    {
+        $family = [];
+
+        /*
+         * Every separator Magento uses, not just the underscore: ids like
+         * 796DDF13...-9-FINAL_PRICE-LIST-CATEGORY-PAGE-USD-20260812 are hyphen-joined, and splitting on
+         * "_" alone would keep the leading hash and put one row per price context in the report.
+         */
+        $tokens = preg_split('/[^A-Z0-9]+/', strtoupper($this->sanitize($key))) ?: [];
+
+        foreach ($tokens as $token) {
+            /* Digits and hex blobs are the identity of one record, never of a family. */
+            if ($token === '' || ctype_digit($token) || preg_match('/^[0-9A-F]{8,}$/', $token)) {
+                break;
+            }
+
+            $family[] = $token;
+            if (count($family) === self::FAMILY_TOKENS) {
+                break;
+            }
+        }
+
+        return $family ? implode('_', $family) : '<hash>';
+    }
+
+    /**
+     * Drop what the storage layer prepends: Symfony's `cache:tags:` / `cache:id_tags:` bookkeeping and
+     * Magento's configured cache id prefix ("69d_", "69d_:").
+     *
+     * @param string $key
+     * @return string
+     */
+    private function stripStoragePrefix(string $key): string
+    {
+        $key = (string)preg_replace('/^cache:(id_)?tags:/i', '', $key);
+
+        /*
+         * Magento's cache id prefix is derived from a hash - "69d_", "69d_:" - so the pattern is
+         * hex-only on purpose. Matching any short token instead turns CUSTOM_BLOCK into BLOCK, which
+         * is both wrong and impossible to notice in a report.
+         */
+        return (string)preg_replace('/^[0-9a-f]{2,8}_:?/', '', $key);
     }
 
     /**

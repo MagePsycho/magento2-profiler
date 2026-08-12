@@ -37,6 +37,12 @@ class Settings
     public const AREA_SESSION = 'SESSION';
     public const AREA_HTTP    = 'HTTP';
     public const AREA_SEARCH  = 'SEARCH';
+    public const AREA_REDIS   = 'REDIS';
+    public const AREA_FPC     = 'FPC';
+    public const AREA_LOCK    = 'LOCK';
+    public const AREA_MAIL    = 'MAIL';
+    public const AREA_IMAGE   = 'IMAGE';
+    public const AREA_QUEUE   = 'QUEUE';
 
     private const ENV_PREFIX = 'MAGE_PROFILER_';
 

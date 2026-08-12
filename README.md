@@ -53,7 +53,7 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * Captures aggregate rows **and** per-call spans, so a timeline is available without deciding before the run
 * **SQL query profiling** on by default, with a per-table breakdown of every query
 * **OpenSearch profiling** per operation and index, covering the reindex path the search adapter never sees
-* Times DB, search, HTTP clients, GraphQL resolvers, Web API, indexers, mview, session handler, cache frontend and console commands
+* Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, indexers, mview, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
 * Thresholds default to **zero** — core's `html` output hides everything under 1ms / 10 calls / 10KB, which drops most of an API request
 * Filter noise by minimum duration or by PCRE on the timer id
 * Log output is confined to `var/log/` and forced to a `.log` extension, so a report can never land somewhere web-served or executable
@@ -170,6 +170,69 @@ MAGE_PROFILER=tabular MAGE_PROFILER_SEARCH=operation bin/magento indexer:reindex
 MAGE_PROFILER=tabular MAGE_PROFILER_SEARCH=0 bin/magento indexer:reindex
 ```
 
+### Cache And Redis Profiling
+
+Cache rows are named after the backend doing the work — `REDIS:load`, `FILE:save`, `DATABASE:clean` — so a profile says which store the time went to without a second column. On Redis the client itself is instrumented too, and every command gets its own row:
+
+```
+REDIS:save (ADMINHTML)              Cnt  32   132.206 ms
+ |- REDIS:MGET (ADMINHTML)          Cnt  32     1.133 ms
+ |- REDIS:MULTI                     Cnt  15     0.031 ms
+ |- REDIS:SETEX (ADMINHTML)         Cnt   4     0.427 ms
+ |- REDIS:SADD (CACHE_ALL_IDS)      Cnt  71     0.068 ms
+ |- REDIS:EXEC                      Cnt  15     0.398 ms
+REDIS:load (CUSTOM_BLOCK)           Cnt  19     0.948 ms
+ |- REDIS:MGET (CUSTOM_BLOCK)       Cnt  19     0.571 ms
+```
+
+The parenthesised part is the **key family**, not the key: `CUSTOM_BLOCK_0D87A5…` becomes `CUSTOM_BLOCK`, `CAT_P_828` becomes `CAT_P`, a bare hash becomes `<hash>`, and a multi-key command adds a count — `MGET (CAT_P +4)`. Leading tokens are kept until the first entity id or hash, three at most.
+
+That reduction is not decoration. Magento's cache ids are per-entity, so putting them in a timer id would give one row per product and per block on a single page — a report nobody can read, a per-prefix cardinality cap exhausted in one request, and customer- and URL-derived identifiers written into a log file that outlives it. The family answers the question you actually have (*which kind of key is costing me*) and stays at a few dozen values.
+
+When you are chasing one specific key, `MAGE_PROFILER_REDIS=keys` puts the whole id back — `REDIS:load (global|primary|plugin-list)` — with all the cardinality and disclosure that implies. Pair it with `MAGE_PROFILER_FILTER` and treat the log as sensitive.
+
+**Operations are lowercase, commands uppercase**, and commands nest under the operation that issued them. That split answers the question the frontend row alone cannot: in the run above, 132ms of `save` contains under 3ms of actual Redis traffic — the rest is serialization and tag bookkeeping in PHP, which is a very different fix from "Redis is slow".
+
+Tag traffic (`SADD`, `SREM`, `SUNION`, `SINTER`) is included, and some of it fires outside any `load`/`save` window — deferred writes are committed on shutdown — so a few command rows legitimately have no cache-operation parent.
+
+Switch it off with `MAGE_PROFILER_REDIS=0`; `MAGE_PROFILER_CACHE=0` drops the frontend rows as well.
+
+One core quirk worth knowing, because it is visible in every 2.4.9 profile: `App\Cache\Frontend\Factory` applies its decorator list **twice** — once inside `createSymfonyCache()` (`Factory.php:595`) and again in `create()` (`:196`) — so every configured cache decorator is built wrapping itself. Magento's own `Decorator\Profiler` shows the symptom as `cache_load` nested inside `cache_load`. This module detects the duplicate and makes the outer instance a pass-through, so cache operations are reported once, by the instance closest to the backend.
+
+Two things to know before reading the numbers:
+
+* **Time overlaps between the layers.** `REDIS:MGET` runs *inside* `REDIS:load`, so the same milliseconds appear in both rows and the `%` column can sum past 100. That is ordinary inclusive-time behaviour — the Self column in the admin viewer is what separates them.
+* **Volume.** A cache-cold page can issue hundreds of commands, and each one is a span. With the default `MAGE_PROFILER_MAX_SPANS=5000` a Redis-heavy request will hit the cap and the Timeline will truncate; raise the cap or set `MAGE_PROFILER_REDIS=0` when you are profiling something else.
+
+Only the **cache** client is instrumented. Session Redis traffic goes through a Credis client that Magento constructs with no injection point of any kind, so it stays behind the single `SESSION:read` / `SESSION:write` timers.
+
+### The Quiet Costs
+
+Five subsystems that spend real time and report none of it anywhere else.
+
+```
+HTTP:POST (gateway.example.com)     1    842.106 ms   <- payment gateway, via the Zend transport
+LOCK:lock (CUSTOM_BLOCK)            2      3.506 ms   <- queued behind another process
+FPC:load                            1      8.916 ms
+ |- FPC:load:miss                   1      0.007 ms   <- Cnt is the hit/miss count
+IMAGE:open (Gd2)                    1     80.448 ms
+IMAGE:resize (Gd2)                  1     14.218 ms
+MAIL:send (Model\Transport)         1    311.400 ms   <- inside the request that placed the order
+QUEUE:publish (product_action_attribute.update)
+QUEUE:consume (Consumer)
+```
+
+| Area | What it covers | Env |
+|---|---|---|
+| `HTTP:` | `HTTP\Adapter\Curl` as well as the two clients — the Zend transport is what **payment and shipping gateways** use, so the slowest call in a checkout used to be invisible | `MAGE_PROFILER_HTTP` |
+| `LOCK:` | `LockManagerInterface`. A lock wait is dead time: no query, no cache call, just a request queued behind another process — the usual reason a page is fast alone and slow under load | `MAGE_PROFILER_LOCK` |
+| `FPC:` | Magento's built-in full page cache, with the hit or miss recorded as a nested marker. Silent behind Varnish, which is itself worth knowing | `MAGE_PROFILER_FPC` |
+| `IMAGE:` | GD / ImageMagick work. The first uncached view of a category page generates every thumbnail it shows | `MAGE_PROFILER_IMAGE` |
+| `MAIL:` | `TransportInterface::sendMessage`. Transactional mail is sent synchronously, so a slow relay is charged to the customer | `MAGE_PROFILER_MAIL` |
+| `QUEUE:` | Publishing and consuming. Consumers are long-running CLI processes — the workload most worth profiling, and the one whose SQL previously had nothing to attribute it to | `MAGE_PROFILER_QUEUE` |
+
+Details stay bounded the same way everywhere: hosts without query strings, adapters rather than file paths, transports rather than recipients, and lock names through the cache-key family reduction — Magento locks per cache entry and per price context, so the raw names are per-entity.
+
 ### Timeline And The Admin Viewer
 
 The `json` output writes one file per run into `var/log/profiler/`, indexed by `index.jsonl` so a run picker can be built without opening every report.
@@ -255,7 +318,7 @@ These control the **output** only — they cannot switch profiling on. Environme
 | Timer Id Filter (PCRE) | `MAGE_PROFILER_FILTER` | none |
 | Print To STDERR On CLI | `MAGE_PROFILER_CLI_STDERR` | Yes |
 
-Instrumentation itself is environment-only: `MAGE_PROFILER_SQL`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
+Instrumentation itself is environment-only: `MAGE_PROFILER_SQL`, `MAGE_PROFILER_REDIS`, `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
 
 ## Security
 
@@ -290,6 +353,16 @@ vendor/bin/phpcs --standard=Magento2 --extensions=php,phtml app/code/MagePsycho/
 Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin, the OpenSearch client plugin and the benchmark helper.
 
 ## Changelog
+
+**Version 1.0.2 (2026-08-12)**
+
+* Redis cache profiling: per-command timers (`REDIS:MGET`, `REDIS:SETEX`, `REDIS:EXEC`, …) below the cache operation that issued them.
+* Cache rows are now prefixed with the backend name — `REDIS:load` instead of `CACHE:load (Redis)`.
+* Cache, Redis and lock details carry the key family — `REDIS:load (CUSTOM_BLOCK)` — with `MAGE_PROFILER_REDIS=keys` for the raw key.
+* New areas: outbound gateway calls via the Zend curl transport, lock waits, built-in FPC hit/miss, image manipulation, mail sending, and message queue publish/consume.
+* Fix: a derived table (`FROM (SELECT …) AS main_table`) stringified the whole subquery into the timer id, giving one row per bound parameter set and writing query text into the log. It now reports the alias, or `<subquery>`.
+* Fix: `Cache\Frontend\Factory` applies its decorator list twice on 2.4.9, so every cache operation was timed twice, nested inside itself. The outer instance now passes through.
+* Tests migrated to PHPUnit attributes where the doc-block data providers had silently stopped running under PHPUnit 12.
 
 **Version 1.0.1 (2026-08-11)**
 
