@@ -83,18 +83,41 @@
         <plugin name="magepsycho_profiler_opensearch" type="MagePsycho\Profiler\Plugin\Search\OpenSearchClientProfiler" sortOrder="10"/>
     </type>
 
-    <!-- Outbound HTTP. Host only - query strings carry API keys. -->
-    <type name="Magento\Framework\HTTP\Client\Curl">
-        <plugin name="magepsycho_profiler_http_curl" type="MagePsycho\Profiler\Plugin\Http\CurlProfiler" sortOrder="10"/>
+    <!--
+        Outbound HTTP. Host only - query strings carry API keys.
+        Declared on ClientInterface, not on Client\Curl: Client\Socket implements the same contract and
+        was invisible while this named the concrete class, and third-party clients that implement the
+        interface are covered without another entry. Declare one or the other, never both - Curl would
+        then carry two plugin layers, and while Guard::enter() keeps the report correct the inner one is
+        pure overhead on a hot path.
+    -->
+    <type name="Magento\Framework\HTTP\ClientInterface">
+        <plugin name="magepsycho_profiler_http_client" type="MagePsycho\Profiler\Plugin\Http\CurlProfiler" sortOrder="10"/>
     </type>
     <type name="Magento\Framework\HTTP\AsyncClientInterface">
         <plugin name="magepsycho_profiler_http_async" type="MagePsycho\Profiler\Plugin\Http\AsyncClientProfiler" sortOrder="10"/>
     </type>
 
     <!--
-        The other curl client: Adapter\Curl is the Zend_Http_Client transport, which is what payment and
-        shipping gateways use. Timed on read(), where the network wait is - write() only hands the
-        request over. Shares MAGE_PROFILER_HTTP with the two above.
+        The Laminas client, which is a separate hierarchy: it extends Laminas\Http\Client and implements
+        no part of ClientInterface above, so nothing else here sees it. PayPal Payflow, USPS, DHL, the
+        currency imports and Payment\Gateway\Http\Client\Zend all go through LaminasClientFactory, which
+        creates it via the ObjectManager - so this really is an interceptor, and the generated one
+        overrides the inherited public send() like any other method.
+        The adapter plugin below does not cover this traffic either: LaminasClient configures
+        Framework\HTTP\Adapter\Curl, but Laminas\Http\Client::setAdapter() builds it with a plain `new`.
+    -->
+    <type name="Magento\Framework\HTTP\LaminasClient">
+        <plugin name="magepsycho_profiler_http_laminas" type="MagePsycho\Profiler\Plugin\Http\LaminasClientProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        The transport, one level below a client: Adapter\Curl. Timed on read(), where the network wait
+        is - write() only hands the request over. Shares MAGE_PROFILER_HTTP with the clients above.
+        Reached only when the adapter itself comes from the ObjectManager, i.e. CurlFactory::create().
+        Payment and shipping gateways were assumed to land here, and they do not: they go through
+        LaminasClient, whose setAdapter() builds this class with a plain `new`, leaving the interceptor
+        out of the picture entirely. That traffic is covered by LaminasClientProfiler above, not here.
     -->
     <type name="Magento\Framework\HTTP\Adapter\Curl">
         <plugin name="magepsycho_profiler_http_adapter" type="MagePsycho\Profiler\Plugin\Http\CurlAdapterProfiler" sortOrder="10"/>

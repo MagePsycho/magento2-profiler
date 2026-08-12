@@ -224,7 +224,7 @@ QUEUE:consume (Consumer)
 
 | Area | What it covers | Env |
 |---|---|---|
-| `HTTP:` | `HTTP\Adapter\Curl` as well as the two clients — the Zend transport is what **payment and shipping gateways** use, so the slowest call in a checkout used to be invisible | `MAGE_PROFILER_HTTP` |
+| `HTTP:` | Every outbound path: `HTTP\ClientInterface` (curl **and** socket, plus third-party clients implementing it), `AsyncClientInterface`, `HTTP\Adapter\Curl`, and `LaminasClient::send()` — the last is what **PayPal Payflow, USPS, DHL and the currency imports** actually use, and it reaches neither of the other two, so the slowest call in a checkout used to be invisible | `MAGE_PROFILER_HTTP` |
 | `LOCK:` | `LockManagerInterface`. A lock wait is dead time: no query, no cache call, just a request queued behind another process — the usual reason a page is fast alone and slow under load | `MAGE_PROFILER_LOCK` |
 | `FPC:` | Magento's built-in full page cache, with the hit or miss recorded as a nested marker. Silent behind Varnish, which is itself worth knowing | `MAGE_PROFILER_FPC` |
 | `IMAGE:` | GD / ImageMagick work. The first uncached view of a category page generates every thumbnail it shows | `MAGE_PROFILER_IMAGE` |

@@ -17,14 +17,14 @@ declare(strict_types=1);
 
 namespace MagePsycho\Profiler\Plugin\Http;
 
-use Magento\Framework\HTTP\Client\Curl;
+use Magento\Framework\HTTP\ClientInterface;
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
 
 /**
- * Times outbound calls made through Magento's curl client as "HTTP:GET api.example.com".
+ * Times outbound calls made through Magento's HTTP clients as "HTTP:GET api.example.com".
  *
  * Network latency is invisible to every other timer in the profile, and a single slow third-party call
  * routinely dominates a request. Payment gateways, shipping-rate lookups, tax services and search
@@ -33,9 +33,16 @@ use MagePsycho\Profiler\Model\Instrumentation\TimerId;
  * Only the **host** is recorded. Full URLs regularly carry API keys and tokens in the query string, and
  * the report is appended to a log file that outlives the request.
  *
- * The public get()/post() pair is the hook point: makeRequest() is protected and cannot be intercepted.
- * Nothing is lost by that - both public methods delegate straight to it, and no non-test subclass adds
- * another verb.
+ * Declared on ClientInterface rather than on Client\Curl: Client\Socket implements the same contract and
+ * was invisible while the plugin named the concrete class, and a third-party client implementing the
+ * interface is covered without another declaration. The two are the only core implementations.
+ *
+ * The public get()/post() pair is the hook point - it is the whole request-issuing surface the interface
+ * declares. Curl::makeRequest() is protected and cannot be intercepted, and nothing is lost by that:
+ * both public methods delegate straight to it, and no non-test subclass adds another verb.
+ *
+ * Laminas traffic does NOT arrive here - Framework\HTTP\LaminasClient extends Laminas\Http\Client and
+ * implements no part of this interface. See LaminasClientProfiler.
  */
 class CurlProfiler
 {
@@ -69,13 +76,13 @@ class CurlProfiler
     }
 
     /**
-     * @param Curl $subject
+     * @param ClientInterface $subject
      * @param callable $proceed
      * @param string $uri
      * @return mixed
      * @SuppressWarnings(PHPMD.UnusedFormalParameter)
      */
-    public function aroundGet(Curl $subject, callable $proceed, $uri)
+    public function aroundGet(ClientInterface $subject, callable $proceed, $uri)
     {
         return $this->run('GET', (string)$uri, static function () use ($proceed, $uri) {
             return $proceed($uri);
@@ -83,14 +90,14 @@ class CurlProfiler
     }
 
     /**
-     * @param Curl $subject
+     * @param ClientInterface $subject
      * @param callable $proceed
      * @param string $uri
      * @param array<string, mixed>|string $params
      * @return mixed
      * @SuppressWarnings(PHPMD.UnusedFormalParameter)
      */
-    public function aroundPost(Curl $subject, callable $proceed, $uri, $params)
+    public function aroundPost(ClientInterface $subject, callable $proceed, $uri, $params)
     {
         return $this->run('POST', (string)$uri, static function () use ($proceed, $uri, $params) {
             return $proceed($uri, $params);

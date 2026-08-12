@@ -17,20 +17,21 @@ declare(strict_types=1);
 
 namespace MagePsycho\Profiler\Test\Unit\Plugin\Http;
 
-use Magento\Framework\HTTP\ClientInterface;
+use Laminas\Http\Request;
+use Magento\Framework\HTTP\LaminasClient;
 use Magento\Framework\Profiler;
 use Magento\Framework\Profiler\DriverInterface;
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
-use MagePsycho\Profiler\Plugin\Http\CurlProfiler;
+use MagePsycho\Profiler\Plugin\Http\LaminasClientProfiler;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
-class CurlProfilerTest extends TestCase
+class LaminasClientProfilerTest extends TestCase
 {
-    private const URL = 'https://api.example.com/v1/orders?api_key=SECRET';
+    private const URL = 'https://payflowpro.paypal.com/transaction?PARTNER=SECRET';
 
     /**
      * @var string[]
@@ -53,35 +54,42 @@ class CurlProfilerTest extends TestCase
     }
 
     /**
-     * The host only - the query string carries an API key and the report outlives the request.
+     * The host only - a Payflow URL carries the partner credentials in its query string.
      *
      * @return void
      */
-    public function testTimerIdCarriesTheHostOnly(): void
+    public function testTimerIdCarriesTheMethodAndHostOnly(): void
     {
         $this->registerDriver();
 
-        $this->runGet();
+        $this->send($this->request('POST', self::URL));
 
-        $this->assertSame(['HTTP:GET (api.example.com)'], $this->startedIds);
+        $this->assertSame(['HTTP:POST (payflowpro.paypal.com)'], $this->startedIds);
     }
 
     /**
+     * send() takes an optional request; without one the client's own state is what gets sent, so that
+     * is what the timer id has to describe.
+     *
      * @return void
      */
-    public function testPostIsTimedSeparately(): void
+    public function testClientStateIsUsedWhenSendIsCalledWithoutARequest(): void
     {
         $this->registerDriver();
 
-        $this->createPlugin()->aroundPost($this->subject(), static function () {
-        }, self::URL, ['a' => 1]);
+        $subject = $this->createMock(LaminasClient::class);
+        $subject->method('getMethod')->willReturn('GET');
+        $subject->method('getUri')->willReturn('https://api.dhl.com/rates?key=SECRET');
 
-        $this->assertSame(['HTTP:POST (api.example.com)'], $this->startedIds);
+        $this->createPlugin()->aroundSend($subject, static function () {
+        });
+
+        $this->assertSame(['HTTP:GET (api.dhl.com)'], $this->startedIds);
     }
 
     /**
-     * A client that throws must still close its timer and release the area guard, or every later
-     * call nests underneath the failed one - or stops being recorded at all.
+     * A gateway that throws must still close its timer and release the area guard, or every later call
+     * nests underneath the failed one - or stops being recorded at all.
      *
      * @return void
      */
@@ -92,23 +100,23 @@ class CurlProfilerTest extends TestCase
         $plugin = $this->createPlugin();
 
         try {
-            $plugin->aroundGet($this->subject(), [$this, 'throwBoom'], self::URL);
+            $plugin->aroundSend($this->subject(), [$this, 'throwBoom'], $this->request('POST', self::URL));
             $this->fail('Expected the exception to propagate');
         } catch (\RuntimeException $e) {
             $this->assertSame('boom', $e->getMessage());
         }
 
-        $plugin->aroundGet($this->subject(), static function () {
-        }, 'https://other.example.com/ping');
+        $plugin->aroundSend($this->subject(), static function () {
+        }, $this->request('GET', 'https://other.example.com/ping'));
 
         $this->assertSame(
-            ['HTTP:GET (api.example.com)', 'HTTP:GET (other.example.com)'],
+            ['HTTP:POST (payflowpro.paypal.com)', 'HTTP:GET (other.example.com)'],
             $this->startedIds
         );
     }
 
     /**
-     * MAGE_PROFILER_HTTP=0 switches outbound timing off without touching the rest of the profiler.
+     * MAGE_PROFILER_HTTP=0 covers this client as well - one switch for all outbound traffic.
      *
      * @param string $value
      * @return void
@@ -120,7 +128,7 @@ class CurlProfilerTest extends TestCase
         putenv('MAGE_PROFILER_HTTP=' . $value);
         $this->registerDriver();
 
-        $this->runGet();
+        $this->send($this->request('POST', self::URL));
 
         $this->assertSame([], $this->startedIds);
     }
@@ -146,9 +154,30 @@ class CurlProfilerTest extends TestCase
         $this->registerDriver();
         Profiler::disable();
 
-        $this->runGet();
+        $this->send($this->request('POST', self::URL));
 
         $this->assertSame([], $this->startedIds);
+    }
+
+    /**
+     * The response has to reach the caller untouched - this plugin only wraps a timer around it.
+     *
+     * @return void
+     */
+    public function testTheResponseIsReturnedUnchanged(): void
+    {
+        $this->registerDriver();
+
+        $response = new \stdClass();
+        $actual   = $this->createPlugin()->aroundSend(
+            $this->subject(),
+            static function () use ($response) {
+                return $response;
+            },
+            $this->request('POST', self::URL)
+        );
+
+        $this->assertSame($response, $actual);
     }
 
     /**
@@ -165,35 +194,47 @@ class CurlProfilerTest extends TestCase
     }
 
     /**
+     * @param Request $request
      * @return void
      */
-    private function runGet(): void
+    private function send(Request $request): void
     {
-        $this->createPlugin()->aroundGet($this->subject(), static function () {
-        }, self::URL);
+        $this->createPlugin()->aroundSend($this->subject(), static function () {
+        }, $request);
     }
 
     /**
-     * The interface, not Client\Curl: the plugin is declared on ClientInterface so that Client\Socket
-     * and third-party clients are covered too.
-     *
-     * @return ClientInterface
+     * @param string $method
+     * @param string $uri
+     * @return Request
      */
-    private function subject(): ClientInterface
+    private function request(string $method, string $uri): Request
     {
-        return $this->createMock(ClientInterface::class);
+        $request = new Request();
+        $request->setMethod($method);
+        $request->setUri($uri);
+
+        return $request;
+    }
+
+    /**
+     * @return LaminasClient
+     */
+    private function subject(): LaminasClient
+    {
+        return $this->createMock(LaminasClient::class);
     }
 
     /**
      * A plugin with freshly built collaborators, so cached env values never leak between tests.
      *
-     * @return CurlProfiler
+     * @return LaminasClientProfiler
      */
-    private function createPlugin(): CurlProfiler
+    private function createPlugin(): LaminasClientProfiler
     {
         $settings = new Settings();
 
-        return new CurlProfiler(new Guard($settings), new Timer(), new TimerId($settings));
+        return new LaminasClientProfiler(new Guard($settings), new Timer(), new TimerId($settings));
     }
 
     /**
