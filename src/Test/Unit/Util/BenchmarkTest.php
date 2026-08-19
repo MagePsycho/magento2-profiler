@@ -245,10 +245,7 @@ class BenchmarkTest extends TestCase
      */
     private function getBenchmarkStack(): array
     {
-        $property = new \ReflectionProperty(Benchmark::class, 'stack');
-        $property->setAccessible(true);
-
-        return $property->getValue();
+        return (new \ReflectionProperty(Benchmark::class, 'stack'))->getValue();
     }
 
     /**
@@ -256,8 +253,7 @@ class BenchmarkTest extends TestCase
      */
     private function resetBenchmarkStack(): void
     {
-        $property = new \ReflectionProperty(Benchmark::class, 'stack');
-        $property->setAccessible(true);
-        $property->setValue(null, []);
+        /* No setAccessible(): it has been a no-op since PHP 8.1 and is deprecated in 8.5. */
+        (new \ReflectionProperty(Benchmark::class, 'stack'))->setValue(null, []);
     }
 }

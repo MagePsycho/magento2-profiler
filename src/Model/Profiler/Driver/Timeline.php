@@ -49,9 +49,28 @@ class Timeline implements DriverInterface
     private const PRECISION = 3;
 
     /**
+     * Span fields a caller may attach through the tags argument of start().
+     */
+    private const CAPTURE_KEYS = ['sql', 'binds'];
+
+    /**
+     * Whether a driver of this class was constructed during the request.
+     *
+     * The instrumentation plugins need to know whether anything will consume what they capture:
+     * under MAGE_PROFILER=tabular the text would be assembled, held and then thrown away. There is
+     * no way to ask for it - Profiler::$_drivers is private with no getter, and this driver is
+     * constructed outside DI by the driver factory - so the driver announces itself instead.
+     *
+     * @var bool
+     */
+    private static $recording = false;
+
+    /**
      * Open invocations, innermost last.
      *
-     * @var array<int, array{id: string, start: float, emalloc: int, realmem: int}>
+     * @var array<int, array{
+     *     id: string, start: float, emalloc: int, realmem: int, tags?: array<string, mixed>
+     * }>
      */
     private $stack = [];
 
@@ -81,6 +100,15 @@ class Timeline implements DriverInterface
      * @var int
      */
     private $dropped = 0;
+
+    /**
+     * Spans that carried captured query text.
+     *
+     * Reported so a reader can tell "capture was off" from "the budget ran out at query 900".
+     *
+     * @var int
+     */
+    private $captured = 0;
 
     /**
      * @var bool
@@ -114,6 +142,8 @@ class Timeline implements DriverInterface
         $this->settings = new Settings();
         $this->context  = new RequestContext($this->settings);
 
+        self::$recording = true;
+
         /*
          * Both, deliberately. __destruct() alone is not enough: Profiler::reset() drops the drivers
          * mid-request (App\StaticResource::launch() does exactly that on every static file), and
@@ -133,10 +163,21 @@ class Timeline implements DriverInterface
     }
 
     /**
+     * Whether a timeline driver is recording this request.
+     *
+     * Asked by the instrumentation plugins before doing work that only this driver consumes.
+     *
+     * @return bool
+     */
+    public static function isRecording(): bool
+    {
+        return self::$recording;
+    }
+
+    /**
      * @param string $timerId Full nested id, e.g. magento->routers_match->X
-     * @param array<string, string>|null $tags
+     * @param array<string, mixed>|null $tags Optional span payload; see CAPTURE_KEYS.
      * @return void
-     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
      */
     public function start($timerId, ?array $tags = null)
     {
@@ -146,12 +187,19 @@ class Timeline implements DriverInterface
             $this->origin = $now;
         }
 
-        $this->stack[] = [
+        $frame = [
             'id'      => (string)$timerId,
             'start'   => $now,
             'emalloc' => memory_get_usage(),
             'realmem' => memory_get_usage(true),
         ];
+
+        /* Only when there is something to carry, so every ordinary frame stays exactly as it was. */
+        if ($tags) {
+            $frame['tags'] = $tags;
+        }
+
+        $this->stack[] = $frame;
     }
 
     /**
@@ -201,10 +249,11 @@ class Timeline implements DriverInterface
     public function clear($timerId = null)
     {
         if ($timerId === null) {
-            $this->stack   = [];
-            $this->spans   = [];
-            $this->totals  = [];
-            $this->dropped = 0;
+            $this->stack    = [];
+            $this->spans    = [];
+            $this->totals   = [];
+            $this->dropped  = 0;
+            $this->captured = 0;
 
             return;
         }
@@ -300,6 +349,19 @@ class Timeline implements DriverInterface
             $span['truncated'] = true;
         }
 
+        /*
+         * Captured payload rides the frame, so a truncated frame - one unwound by an exception -
+         * keeps its statement. That is usually the exact query being hunted.
+         */
+        $span += $this->captureFields(isset($frame['tags']) ? (array)$frame['tags'] : []);
+        if (isset($span['sql'])) {
+            $this->captured++;
+        }
+
+        /*
+         * accumulate() builds a row from a fixed key list and never copies the span, so query text
+         * cannot reach the aggregated rows. Pinned by TimelineTest.
+         */
         $this->accumulate($span);
 
         /* Past the cap the call still counts, it just is not drawn. */
@@ -310,6 +372,41 @@ class Timeline implements DriverInterface
         }
 
         $this->spans[] = $span;
+    }
+
+    /**
+     * Pick the recognised payload out of a tags array.
+     *
+     * start() is public driver API and tags travel through core's Profiler, so nothing here trusts
+     * its input: unknown keys are ignored and the two known ones are shape-checked.
+     *
+     * @param array<string, mixed> $tags
+     * @return array<string, mixed>
+     */
+    private function captureFields(array $tags): array
+    {
+        $fields = [];
+
+        foreach (self::CAPTURE_KEYS as $key) {
+            if (!isset($tags[$key])) {
+                continue;
+            }
+
+            if ($key === 'binds') {
+                $binds = is_array($tags[$key]) ? array_values(array_map('strval', $tags[$key])) : [];
+                if ($binds) {
+                    $fields[$key] = $binds;
+                }
+
+                continue;
+            }
+
+            if (is_string($tags[$key]) && $tags[$key] !== '') {
+                $fields[$key] = $tags[$key];
+            }
+        }
+
+        return $fields;
     }
 
     /**
@@ -402,6 +499,10 @@ class Timeline implements DriverInterface
 
         if ($this->dropped > 0) {
             $meta['dropped'] = $this->dropped;
+        }
+
+        if ($this->captured > 0) {
+            $meta['sql_captured'] = $this->captured;
         }
 
         $report = ['meta' => $meta, 'rows' => $rows];

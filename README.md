@@ -138,6 +138,50 @@ MAGE_PROFILER=tabular MAGE_PROFILER_SQL=operation bin/magento indexer:reindex
 MAGE_PROFILER=tabular MAGE_PROFILER_SQL=0 bin/magento indexer:reindex
 ```
 
+#### Capturing The Statement Itself
+
+`MAGE_PROFILER_SQL=query` records the statement and its bind params onto every SQL span, and the
+admin viewer turns a `SQL:` row into a click that shows them, syntax-highlighted. Without it the
+report tells you `SQL:SELECT (catalog_product_entity +3)` cost 157 ms but never which query that was.
+
+```bash
+MAGE_PROFILER=json MAGE_PROFILER_SQL=query bin/magento indexer:reindex
+```
+
+For a single storefront request, set it as a **second cookie** next to `MAGE_PROFILER` — area flags
+are otherwise read from the environment only, which would turn capture on for every request the
+container serves:
+
+```
+Cookie: MAGE_PROFILER=json
+Cookie: MAGE_PROFILER_SQL=query
+```
+
+Cookie-supplied flags are honoured under exactly the gate that guards cookie activation itself:
+developer mode, or a matching `MAGE_PROFILER_SECRET`. Activating by environment variable does not
+open the door — otherwise a passing visitor could upgrade an operator's run to capture statements.
+
+The modes are mutually exclusive. `operation` exists to shed detail and `query` to gather it, so
+there is no `operation,query`; use `MAGE_PROFILER_MAX_DETAIL` if you want shorter ids while capturing.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MAGE_PROFILER_SQL_MAXLEN` | `1000` | Longest captured statement, cut at the tail with `...`. A storefront `SELECT` with a few joins is 400-900 bytes |
+| `MAGE_PROFILER_SQL_BUDGET` | `1048576` | Total captured bytes per request. Once spent, later spans carry no statement and the CPU cost stops too |
+
+`meta.sql_captured` in the report counts the spans that carried a statement, so a run that hit the
+budget is distinguishable from one recorded with capture off.
+
+Two things worth knowing before turning it on:
+
+* **Pair it with a shorter retention.** 1 MiB per report against the default `MAGE_PROFILER_KEEP=100`
+  is ~130 MB in `var/log/profiler`. `MAGE_PROFILER_KEEP=10` is a sensible companion.
+* **`MAGE_PROFILER_MAX_SPANS=0` captures nothing**, because the statement lives on the span. The
+  reverse is a nice property though: once the per-prefix id cap collapses ids into `SQL:<overflow>`,
+  the aggregate row is useless but the per-span statement is not.
+
+`full` is reserved for a later release: the same capture plus the call stack that issued the query.
+
 ### Search Engine Profiling
 
 Two layers. `SEARCH:` times the search adapter, so a storefront request shows which container was queried. `OPENSEARCH:` times the OpenSearch client underneath it — which index, which operation, how big the indexing batches were. The write path never goes through the adapter, so without the second layer a `catalogsearch_fulltext` reindex looks like pure SQL:
@@ -318,9 +362,15 @@ These control the **output** only — they cannot switch profiling on. Environme
 | Timer Id Filter (PCRE) | `MAGE_PROFILER_FILTER` | none |
 | Print To STDERR On CLI | `MAGE_PROFILER_CLI_STDERR` | Yes |
 
-Instrumentation itself is environment-only: `MAGE_PROFILER_SQL`, `MAGE_PROFILER_REDIS`, `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
+Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `operation` for no table names, `query` to capture the statement), `MAGE_PROFILER_REDIS`, `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_SQL_MAXLEN`, `MAGE_PROFILER_SQL_BUDGET`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
 
 ## Security
+
+`MAGE_PROFILER_SQL=query` writes the statement **and its bound values** into the report. Those values
+routinely include customer data - email addresses, names, tokens. No redaction is attempted, because
+positional binds carry no column name and any heuristic would be theatre. Treat a report recorded
+with capture on exactly as you would treat a query log: it is off by default, the admin viewer is
+behind its own ACL resource, and `var/log/profiler` should not be world-readable.
 
 Cookie activation lets an unauthenticated visitor make the server write to disk and expose internal timing. It is therefore honoured **only** when:
 
@@ -353,6 +403,13 @@ vendor/bin/phpcs --standard=Magento2 --extensions=php,phtml app/code/MagePsycho/
 Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin, the OpenSearch client plugin and the benchmark helper.
 
 ## Changelog
+
+**Version 1.0.3 (2026-08-18)**
+
+* `MAGE_PROFILER_SQL=query` captures the statement and its bind params onto every SQL span, for the admin viewer to show on click. Opt-in, bounded by `MAGE_PROFILER_SQL_MAXLEN` and `MAGE_PROFILER_SQL_BUDGET`, and skipped entirely when no timeline driver is recording - a `tabular` run pays nothing.
+* Area flags may now be supplied as cookies, so one request can be recorded with capture on without setting a container-wide variable. Gated on developer mode or a matching `MAGE_PROFILER_SECRET`, never on environment activation alone.
+* First unit tests for the Timeline driver, covering the span payload, the sparse `meta.sql_captured` counter, and the guarantee that aggregated rows never carry query text.
+* Outbound HTTP coverage extended to `LaminasClient`, which was recorded nowhere: PayPal Payflow, USPS, DHL, the currency imports and the Zend payment gateway client all reach the network through it. The curl declaration now targets `HTTP\ClientInterface`, so `Client\Socket` and third-party clients are covered too.
 
 **Version 1.0.2 (2026-08-12)**
 

@@ -103,19 +103,52 @@
      * Cookie activation is a live-site information-disclosure and disk-write vector, so it is only
      * honoured in developer mode, or when the cookie carries the MAGE_PROFILER_SECRET value.
      */
-    if ($fromCookie) {
-        $mode = '';
-        $env  = BP . '/app/etc/env.php';
-        if (is_file($env)) {
-            $envData = include $env;
-            $mode    = is_array($envData) && isset($envData['MAGE_MODE']) ? (string)$envData['MAGE_MODE'] : '';
+    $mode = '';
+    $env  = BP . '/app/etc/env.php';
+    if (is_file($env)) {
+        $envData = include $env;
+        $mode    = is_array($envData) && isset($envData['MAGE_MODE']) ? (string)$envData['MAGE_MODE'] : '';
+    }
+
+    $secretExpected = (string)(getenv('MAGE_PROFILER_SECRET') ?: '');
+    $secretMatched  = $secretExpected !== '' && hash_equals($secretExpected, $secretGiven);
+    $cookiesTrusted = $mode === 'developer' || $secretMatched;
+
+    if ($fromCookie && !$cookiesTrusted) {
+        return;
+    }
+
+    /**
+     * Area flags may also arrive as cookies, so a single request can be recorded with, say, SQL
+     * capture on without setting a container-wide variable that then applies to everybody.
+     *
+     * Gated on $cookiesTrusted, NOT merely on having got this far. Activation by environment
+     * variable says the operator wants profiling; it does not say a passing visitor may upgrade that
+     * run to capture statements and bound values. Settings reads getenv() exclusively, which is why
+     * promotion is needed at all.
+     */
+    $promotable = $cookiesTrusted ? [
+        'SQL', 'WEBAPI', 'GRAPHQL', 'INDEXER', 'CLI', 'CACHE', 'SESSION', 'HTTP', 'SEARCH',
+        'REDIS', 'FPC', 'LOCK', 'MAIL', 'IMAGE', 'QUEUE', 'SQL_MAXLEN', 'SQL_BUDGET',
+    ] : [];
+
+    foreach ($promotable as $flag) {
+        $name = 'MAGE_PROFILER_' . $flag;
+
+        /* An explicit environment variable outranks a cookie. */
+        $current = getenv($name);
+        if (is_string($current) && trim($current) !== '') {
+            continue;
         }
 
-        if ($mode !== 'developer') {
-            $secretExpected = (string)(getenv('MAGE_PROFILER_SECRET') ?: '');
-            if ($secretExpected === '' || !hash_equals($secretExpected, $secretGiven)) {
-                return;
-            }
+        if (empty($_COOKIE[$name]) || !is_string($_COOKIE[$name])) {
+            continue;
+        }
+
+        /* Allowlisted names, and a value shape narrow enough that nothing can be smuggled through. */
+        $cookieValue = trim($_COOKIE[$name]);
+        if ($cookieValue !== '' && preg_match('/^[A-Za-z0-9_,-]{1,32}$/', $cookieValue)) {
+            putenv($name . '=' . $cookieValue);
         }
     }
 

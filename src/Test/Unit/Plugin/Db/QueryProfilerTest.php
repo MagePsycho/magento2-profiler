@@ -22,9 +22,11 @@ use Magento\Framework\DB\Select;
 use Magento\Framework\Profiler;
 use Magento\Framework\Profiler\DriverInterface;
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
+use MagePsycho\Profiler\Model\Instrumentation\QueryCapture;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
+use MagePsycho\Profiler\Model\Profiler\Driver\Timeline;
 use MagePsycho\Profiler\Plugin\Db\QueryProfiler;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -36,12 +38,23 @@ class QueryProfilerTest extends TestCase
      */
     private $startedIds = [];
 
+    /**
+     * Tags handed to the driver alongside each timer id.
+     *
+     * @var array<int, array<string, mixed>|null>
+     */
+    private $startedTags = [];
+
     protected function setUp(): void
     {
-        $this->startedIds = [];
+        $this->startedIds  = [];
+        $this->startedTags = [];
         Profiler::reset();
         putenv('MAGE_PROFILER_SQL');
         putenv('MAGE_PROFILER_MAX_DETAIL');
+        putenv('MAGE_PROFILER_SQL_MAXLEN');
+        putenv('MAGE_PROFILER_SQL_BUDGET');
+        $this->setTimelineRecording(true);
     }
 
     protected function tearDown(): void
@@ -49,6 +62,9 @@ class QueryProfilerTest extends TestCase
         Profiler::reset();
         putenv('MAGE_PROFILER_SQL');
         putenv('MAGE_PROFILER_MAX_DETAIL');
+        putenv('MAGE_PROFILER_SQL_MAXLEN');
+        putenv('MAGE_PROFILER_SQL_BUDGET');
+        $this->setTimelineRecording(false);
     }
 
     /**
@@ -399,6 +415,300 @@ class QueryProfilerTest extends TestCase
     }
 
     /**
+     * Capture is opt-in: the default run must carry no payload at all.
+     *
+     * @return void
+     */
+    public function testNothingIsCapturedByDefault(): void
+    {
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1 FROM `dual`');
+
+        $this->assertSame([null], $this->startedTags);
+    }
+
+    /**
+     * operation sheds detail, query gathers it - the two modes are mutually exclusive.
+     *
+     * @return void
+     */
+    public function testOperationModeCapturesNothing(): void
+    {
+        putenv('MAGE_PROFILER_SQL=operation');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1 FROM `dual`');
+
+        $this->assertSame(['SQL:SELECT'], $this->startedIds);
+        $this->assertNull($this->lastTags());
+    }
+
+    /**
+     * @return void
+     */
+    public function testUnknownModeValueLeavesCaptureOff(): void
+    {
+        putenv('MAGE_PROFILER_SQL=1');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1 FROM `dual`');
+
+        $this->assertSame(['SQL:SELECT (dual)'], $this->startedIds);
+        $this->assertNull($this->lastTags());
+    }
+
+    /**
+     * @return void
+     */
+    public function testQueryModeCapturesStatementAndBinds(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin(
+            'SELECT * FROM `eav_attribute` WHERE entity_type_id = :entity_type_id AND code = :code',
+            ['entity_type_id' => 4, ':code' => 'name']
+        );
+
+        $tags = $this->captured();
+        $this->assertStringStartsWith('SELECT * FROM `eav_attribute`', $tags['sql']);
+        /* The colon is stripped so :code and code read alike - _prepareQuery() normalises later. */
+        $this->assertSame(['entity_type_id=4', 'code=name'], $tags['binds']);
+    }
+
+    /**
+     * Nothing to consume the payload means nothing should be built.
+     *
+     * @return void
+     */
+    public function testCaptureIsSkippedWhenNoTimelineIsRecording(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->setTimelineRecording(false);
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1 FROM `dual`');
+
+        $this->assertNull($this->lastTags());
+    }
+
+    /**
+     * @return void
+     */
+    public function testCaptureIsSkippedWhileTheProfilerIsDisabled(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+        Profiler::disable();
+
+        $select = $this->createMock(Select::class);
+        $select->expects($this->never())->method('assemble');
+
+        $this->assertSame('result', $this->runPlugin($select));
+    }
+
+    /**
+     * assemble(), never __toString() - see QueryCapture for why that distinction matters.
+     *
+     * @return void
+     */
+    public function testSelectObjectIsAssembledOnlyWhenCapturing(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $select = $this->createMock(Select::class);
+        $select->method('getPart')->willReturn([
+            'e' => ['joinType' => Select::FROM, 'tableName' => 'catalog_product_entity'],
+        ]);
+        $select->expects($this->once())->method('assemble')->willReturn('SELECT * FROM `catalog_product_entity`');
+        $select->expects($this->never())->method('__toString');
+
+        $this->runPlugin($select);
+
+        $this->assertSame('SELECT * FROM `catalog_product_entity`', $this->captured()['sql']);
+    }
+
+    /**
+     * A broken renderer must cost the query nothing.
+     *
+     * @return void
+     */
+    public function testCaptureFailureDoesNotBreakTheQuery(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $select = $this->createMock(Select::class);
+        $select->method('getPart')->willReturn([
+            'e' => ['joinType' => Select::FROM, 'tableName' => 'catalog_product_entity'],
+        ]);
+        $select->method('assemble')->willThrowException(new \RuntimeException('renderer exploded'));
+
+        $this->assertSame('result', $this->runPlugin($select));
+        $this->assertSame(['SQL:SELECT (catalog_product_entity)'], $this->startedIds);
+        $this->assertNull($this->lastTags());
+    }
+
+    /**
+     * @return void
+     */
+    public function testCapturedSqlIsWhitespaceNormalised(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin("SELECT\n    *\n  FROM\t`dual`\n");
+
+        $this->assertSame('SELECT * FROM `dual`', $this->captured()['sql']);
+    }
+
+    /**
+     * The nesting separator is illegal in a timer id and perfectly legal in a JSON path.
+     *
+     * Guards against someone later "tidying" QueryCapture to reuse TimerId::sanitize().
+     *
+     * @return void
+     */
+    public function testTheNestingSeparatorSurvivesInCapturedSql(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin("SELECT json_col->'\$.sku' FROM `weird->table`");
+
+        $this->assertStringContainsString("json_col->'\$.sku'", $this->captured()['sql']);
+        /* Whatever the id ends up being, it must not carry the separator - Profiler::start() throws. */
+        $this->assertStringNotContainsString('->', $this->startedIds[0]);
+    }
+
+    /**
+     * @return void
+     */
+    public function testCapturedSqlHonoursMaxLen(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        putenv('MAGE_PROFILER_SQL_MAXLEN=32');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT * FROM `dual` WHERE id IN (' . implode(',', range(1, 200)) . ')');
+
+        $sql = $this->captured()['sql'];
+        $this->assertSame(32, strlen($sql));
+        $this->assertStringStartsWith('SELECT * FROM `dual`', $sql);
+        $this->assertStringEndsWith('...', $sql);
+    }
+
+    /**
+     * A byte cut through a multi-byte literal would make the whole report field encode as null.
+     *
+     * @return void
+     */
+    public function testMultibyteSqlIsNotSplitMidCharacter(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        putenv('MAGE_PROFILER_SQL_MAXLEN=30');
+        $this->registerDriver();
+
+        $this->runPlugin("SELECT * FROM `t` WHERE n = 'ünïcödé wörth cüttïng'");
+
+        $sql = $this->captured()['sql'];
+        $this->assertTrue(mb_check_encoding($sql, 'UTF-8'));
+        $this->assertIsString(json_encode(['sql' => $sql]));
+    }
+
+    /**
+     * @return void
+     */
+    public function testBindCountIsCapped(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1', range(1, 50));
+
+        $binds = $this->captured()['binds'];
+        $this->assertCount(21, $binds);
+        $this->assertSame('+30 more', end($binds));
+    }
+
+    /**
+     * @param mixed $value
+     * @param string $expected
+     * @return void
+     * @dataProvider bindValueDataProvider
+     */
+    #[DataProvider('bindValueDataProvider')]
+    public function testBindValueShapes($value, string $expected): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT 1', ['v' => $value]);
+
+        $this->assertSame(['v=' . $expected], $this->captured()['binds']);
+    }
+
+    /**
+     * @return array<string, array<int, mixed>>
+     */
+    public static function bindValueDataProvider(): array
+    {
+        return [
+            'null'    => [null, 'NULL'],
+            'true'    => [true, 'true'],
+            'false'   => [false, 'false'],
+            'int'     => [42, '42'],
+            'float'   => [1.5, '1.5'],
+            'string'  => ['name', 'name'],
+            'long'    => [str_repeat('a', 200), str_repeat('a', 61) . '...'],
+            'array'   => [[1, 2, 3], '<array:3>'],
+            'object'  => [new \stdClass(), '<stdClass>'],
+        ];
+    }
+
+    /**
+     * Mysql::_prepareQuery() is what wraps a scalar bind into an array, and it runs after us.
+     *
+     * @return void
+     */
+    public function testNonArrayBindIsHandled(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        $this->registerDriver();
+
+        $this->runPlugin('SELECT * FROM `dual` WHERE id = ?', 5);
+
+        $this->assertSame(['5'], $this->captured()['binds']);
+    }
+
+    /**
+     * Past the budget the queries still run and are still timed - they just stop carrying text.
+     *
+     * @return void
+     */
+    public function testBudgetStopsCapture(): void
+    {
+        putenv('MAGE_PROFILER_SQL=query');
+        putenv('MAGE_PROFILER_SQL_BUDGET=30');
+        $this->registerDriver();
+
+        $plugin = $this->createPlugin();
+        for ($i = 0; $i < 3; $i++) {
+            $this->assertSame('result', $this->runPlugin('SELECT * FROM `catalog_product_entity`', [], $plugin));
+        }
+
+        $this->assertIsArray($this->startedTags[0]);
+        $this->assertNull($this->startedTags[1]);
+        $this->assertNull($this->startedTags[2]);
+        $this->assertSame(
+            array_fill(0, 3, 'SQL:SELECT (catalog_product_entity)'),
+            $this->startedIds
+        );
+    }
+
+    /**
      * Callback used by testTimerIsClosedWhenTheQueryThrows().
      *
      * Kept out of the test method so the throw and the catch do not share a scope.
@@ -413,16 +723,18 @@ class QueryProfilerTest extends TestCase
 
     /**
      * @param string|Select $sql
+     * @param mixed $bind
+     * @param QueryProfiler|null $plugin Reuse one instance when the test spans several queries.
      * @return mixed
      */
-    private function runPlugin($sql)
+    private function runPlugin($sql, $bind = [], ?QueryProfiler $plugin = null)
     {
-        $plugin  = $this->createPlugin();
+        $plugin  = $plugin ?: $this->createPlugin();
         $subject = $this->createMock(Mysql::class);
 
         return $plugin->aroundQuery($subject, static function () {
             return 'result';
-        }, $sql);
+        }, $sql, $bind);
     }
 
     /**
@@ -434,7 +746,13 @@ class QueryProfilerTest extends TestCase
     {
         $settings = new Settings();
 
-        return new QueryProfiler(new Guard($settings), new Timer(), new TimerId($settings), $settings);
+        return new QueryProfiler(
+            new Guard($settings),
+            new Timer(),
+            new TimerId($settings),
+            $settings,
+            new QueryCapture($settings)
+        );
     }
 
     /**
@@ -446,10 +764,45 @@ class QueryProfilerTest extends TestCase
     {
         $driver = $this->createMock(DriverInterface::class);
         $driver->method('start')
-            ->willReturnCallback(function ($timerId): void {
-                $this->startedIds[] = $timerId;
+            ->willReturnCallback(function ($timerId, $tags = null): void {
+                $this->startedIds[]  = $timerId;
+                $this->startedTags[] = $tags;
             });
 
         Profiler::add($driver);
+    }
+
+    /**
+     * Capture is gated on a timeline driver existing, which a unit test has no business constructing -
+     * its constructor registers a shutdown hook that writes a real report.
+     *
+     * @param bool $on
+     * @return void
+     */
+    private function setTimelineRecording(bool $on): void
+    {
+        /* No setAccessible(): it has been a no-op since PHP 8.1 and is deprecated in 8.5. */
+        (new \ReflectionProperty(Timeline::class, 'recording'))->setValue(null, $on);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function lastTags(): ?array
+    {
+        return $this->startedTags ? end($this->startedTags) : null;
+    }
+
+    /**
+     * The captured payload, asserted to exist so the reads below stay unambiguous.
+     *
+     * @return array<string, mixed>
+     */
+    private function captured(): array
+    {
+        $tags = $this->lastTags();
+        $this->assertIsArray($tags, 'expected a captured payload');
+
+        return $tags;
     }
 }

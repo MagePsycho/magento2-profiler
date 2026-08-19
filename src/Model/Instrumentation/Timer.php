@@ -35,11 +35,21 @@ class Timer
      *
      * @param string $timerId
      * @param callable $callback
+     * @param array<string, mixed>|null $tags Forwarded verbatim to the drivers; only Timeline reads them.
      * @return mixed
      */
-    public function measure(string $timerId, callable $callback)
+    public function measure(string $timerId, callable $callback, ?array $tags = null)
     {
-        Profiler::start($timerId);
+        /*
+         * Core checks the passed tags in start() but only the default tags in stop()
+         * (Profiler.php:261 vs :292). Should anyone ever call Profiler::addTagFilter(), a start that
+         * passes the filter would pair with a stop that returns early and the frame would leak.
+         * Passing no tags at all is what makes this immune today, and there is no getter to detect a
+         * filter defensively. In practice bootstrap.php applies 'tagFilters' => [] and nothing in the
+         * framework adds one; Timeline::stop() pops rather than matches, which caps the damage at a
+         * mis-parented subtree rather than an unbounded stack.
+         */
+        Profiler::start($timerId, $tags);
         try {
             return $callback();
         } finally {
