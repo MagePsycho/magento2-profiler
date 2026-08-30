@@ -11,3 +11,10 @@
 /phpstan.neon           export-ignore
 /phpstan.neon.dist      export-ignore
 /phpunit.xml.dist       export-ignore
+
+# The dev configs actually live at the module root, which is src/ in this repo. The entries
+# above are repo-root paths kept for the layout the archive script assumes; these are the
+# ones that match.
+/src/phpcs.xml.dist     export-ignore
+/src/phpstan.neon       export-ignore
+/src/phpunit.xml.dist   export-ignore

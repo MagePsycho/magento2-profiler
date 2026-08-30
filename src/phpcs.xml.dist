@@ -1,0 +1,64 @@
+<!--
+    Coding standard for MagePsycho_Profiler.
+
+    phpcs discovers this ruleset on its own when the module directory is the working
+    directory, so from the Magento root:
+      MAGENTO_ROOT=$(pwd)
+      cd app/code/MagePsycho/Profiler && "$MAGENTO_ROOT"/vendor/bin/phpcs -p
+
+    (app/code/MagePsycho/Profiler is a modman symlink, so relative paths back out of it land
+    in the .modman package, not in the Magento root. Hence the absolute MAGENTO_ROOT.)
+
+    CI runs it through graycoreio/github-actions-magento2/coding-standard, which invokes a
+    bare `vendor/bin/phpcs` whenever a ruleset like this one is present, so the file list
+    below is the whole scope of the check, not a default that something else overrides.
+
+    installed_paths is deliberately not set here. The CI action registers the standard
+    itself, and a hardcoded relative path would be wrong in one of the two layouts this
+    module is checked in (repo checkout vs. app/code symlink).
+-->
+<ruleset name="MagePsycho_Profiler">
+    <description>Coding standard for the Profiler module.</description>
+
+    <arg name="basepath" value="."/>
+    <arg name="extensions" value="php,phtml"/>
+    <arg name="colors"/>
+    <!-- s = show sniff codes, p = progress. Deliberately not "n": that suppresses warnings
+         from the report entirely, which would hide the debt rather than report it. -->
+    <arg value="sp"/>
+
+    <!--
+        Warnings are reported but do not fail the build. The module carries ~300 pre-existing
+        annotation warnings (missing @param on plugin methods, mostly), and turning that into
+        a red pipeline on day one would train everyone to ignore the check. Errors still fail.
+    -->
+    <config name="ignore_warnings_on_exit" value="1"/>
+
+    <!-- Files to scan. Enumerated rather than "." so a vendor/ tree created by CI installing
+         the coding standard into this directory is never walked. -->
+    <file>Block</file>
+    <file>Console</file>
+    <file>Model</file>
+    <file>Plugin</file>
+    <file>Util</file>
+    <file>etc</file>
+    <file>view</file>
+    <file>bootstrap.php</file>
+    <file>registration.php</file>
+
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/Test/*</exclude-pattern>
+
+    <rule ref="Magento2"/>
+
+    <!--
+        Magento2.Functions.FunctionsDeprecatedWithoutArgument throws an internal exception on
+        bootstrap.php ("The $start position for getTokensAsString() must exist in the token
+        stack"), which phpcs reports as a hard ERROR and would fail CI. The crash is in the
+        sniff, not in the file - every other sniff walks bootstrap.php fine - so the sniff is
+        skipped for that one file rather than the file being dropped from the scan.
+    -->
+    <rule ref="Magento2.Functions.FunctionsDeprecatedWithoutArgument">
+        <exclude-pattern>bootstrap.php</exclude-pattern>
+    </rule>
+</ruleset>

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/graycoreio/github-actions-magento2/main/resolve-check-config/check-extension.schema.json",
+  "jobs": {
+    "integration_test": false
+  }
+}

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Unit test config for MagePsycho_Profiler.
+
+    Run from the Magento root:
+      vendor/bin/phpunit -c app/code/MagePsycho/Profiler/phpunit.xml.dist
+
+    The tests are plain unit tests, but they type-hint Magento framework classes, so they need
+    Magento's own unit bootstrap. Test/bootstrap.php finds it by walking up to the Magento root
+    rather than by a fixed relative path, because the three layouts this module lives in sit at
+    different depths - see the comment in that file.
+
+    CI does not use this file: graycoreio's check-extension workflow splices a testsuite pointing
+    at vendor/<package>/Test/Unit into Magento's own dev/tests/unit/phpunit.xml.dist instead. This
+    is here so the same suite is one command away locally.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/12.5/phpunit.xsd"
+         bootstrap="Test/bootstrap.php"
+         colors="true"
+         columns="max"
+         beStrictAboutTestsThatDoNotTestAnything="false"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="MagePsycho_Profiler_Unit">
+            <directory>Test/Unit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">.</directory>
+        </include>
+        <exclude>
+            <directory>Test</directory>
+        </exclude>
+    </source>
+</phpunit>

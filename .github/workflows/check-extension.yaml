@@ -1,0 +1,45 @@
+name: Check Extension
+
+on:
+  push:
+    branches: [main]
+  # Every pull request, not only those targeting main: a PR stacked on another
+  # feature branch is exactly the change most worth checking, and filtering on
+  # the base branch silently gives it no CI at all.
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The matrix is computed rather than hardcoded, so a new Magento release is picked up
+  # without touching this file. `project: mage-os` keeps the whole pipeline credential-free:
+  # Magento Open Source itself would need repo.magento.com marketplace keys as repo secrets,
+  # and the two are API-identical for what this workflow checks (install, di:compile, unit).
+  compute-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.supported.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graycoreio/github-actions-magento2/supported-version@v8.10.0
+        id: supported
+        with:
+          project: mage-os
+
+  check-extension:
+    needs: compute-matrix
+    uses: graycoreio/github-actions-magento2/.github/workflows/check-extension.yaml@v8.10.0
+    with:
+      matrix: ${{ needs.compute-matrix.outputs.matrix }}
+
+      # This repo is modman-managed: the module root is `src/`, which is what gets symlinked
+      # to app/code/MagePsycho/Profiler. `src/composer.json` is the module-root-relative twin
+      # of the repo-root one, so pointing the workflow at `src` makes every downstream path
+      # line up unmodified - in particular the unit-test job, which looks for
+      # `vendor/<package>/Test/Unit` and would miss `vendor/<package>/src/Test/Unit`.
+      path: src
+
+      # The default mirror (https://mirror.mage-os.org/) only proxies magento/* packages;
+      # the mage-os/project-community-edition metapackage this matrix asks for is published
+      # to https://repo.mage-os.org/. Without this override, composer fails with
+      # "Could not find package mage-os/project-community-edition".
+      magento_repository: https://repo.mage-os.org/

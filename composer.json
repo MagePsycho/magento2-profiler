@@ -30,7 +30,10 @@
       "/.php-cs-fixer.dist.php",
       "/phpstan.neon",
       "/phpstan.neon.dist",
-      "/phpunit.xml.dist"
+      "/phpunit.xml.dist",
+      "/src/phpcs.xml.dist",
+      "/src/phpstan.neon",
+      "/src/phpunit.xml.dist"
     ]
   }
 }
