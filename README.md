@@ -65,7 +65,8 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * Captures aggregate rows **and** per-call spans, so a timeline is available without deciding before the run
 * **SQL query profiling** on by default, with a per-table breakdown of every query
 * **OpenSearch profiling** per operation and index, covering the reindex path the search adapter never sees
-* Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, indexers, mview, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
+* Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, controller dispatch, indexers, mview, cron jobs, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
+* **Per-job cron timing.** Core measures each job against a private stat object and writes it out as JSON; this surfaces it in the same report as everything the job did
 * Thresholds default to **zero** — core's `html` output hides everything under 1ms / 10 calls / 10KB, which drops most of an API request
 * Filter noise by minimum duration or by PCRE on the timer id
 * Log output is confined to `var/log/` and forced to a `.log` extension, so a report can never land somewhere web-served or executable
@@ -134,6 +135,35 @@ Cookie: MAGE_PROFILER=tabular,json:<secret>
 ```
 
 Store configuration cannot switch profiling on: activation happens during bootstrap, long before store config is readable. The admin settings control the **output** only.
+
+### Every Request Type Gets A Root
+
+Nesting is only useful if something sits at the top of it. Core opens one root timer, `magento`, for
+web requests and nothing at all for the console, so a CLI profile used to be a flat list of unrelated
+roots and a storefront profile had `magento` and then a thousand-row drop straight to individual
+queries.
+
+Each entry point now reports its own row, and everything else hangs underneath it:
+
+```
+CLI:indexer:reindex                             bin/magento, by command name
+WEBAPI:GET /V1/products/:sku                    REST, by matched route template
+GRAPHQL:query (getProducts)                     GraphQL, by operation name
+CONTROLLER:checkout_index_index                 storefront and adminhtml, by full action name
+```
+
+`CONTROLLER:` is wired on `ActionInterface`, so it covers every controller — **including the ones core
+does not time.** Core only times controllers extending the deprecated `Magento\Framework\App\Action\Action`
+base class, which emits `CONTROLLER_ACTION:` from its own `dispatch()`. Anything implementing
+`ActionInterface` directly — the modern majority, and every Hyvä controller — went through
+`FrontController::processRequest`, which has no per-action timer at all.
+
+Controllers that *do* extend the legacy base class are skipped deliberately, so core keeps them and
+the same work is never reported twice under two names. A profile therefore shows `CONTROLLER:` or
+`CONTROLLER_ACTION:` for a given page, never both.
+
+There is no area flag for it. One timer per request is too cheap to be worth a switch, and it is the
+row every other row hangs from.
 
 ### SQL Query Profiling
 
@@ -228,7 +258,9 @@ MAGE_PROFILER=tabular MAGE_PROFILER_SEARCH=0 bin/magento indexer:reindex
 
 ### Cache And Redis Profiling
 
-Cache rows are named after the backend doing the work — `REDIS:load`, `FILE:save`, `DATABASE:clean` — so a profile says which store the time went to without a second column. On Redis the client itself is instrumented too, and every command gets its own row:
+Cache rows are named after the backend doing the work — `REDIS:load`, `FILE:save`, `DATABASE:clean` — so a profile says which store the time went to without a second column. Those rows are on by default.
+
+The Redis client itself can be instrumented as well, giving every command its own row. **That is opt-in — `MAGE_PROFILER_REDIS=1`.** Wire commands nest inside the cache operation that issued them, so leaving them on by default meant every report carried a second, finer copy of what the rows above them already said, and a cache-cold page turned into hundreds of extra spans. Ask for them when the question is specifically *what is this frontend call doing on the wire*:
 
 ```
 REDIS:save (ADMINHTML)              Cnt  32   132.206 ms
@@ -251,20 +283,37 @@ When you are chasing one specific key, `MAGE_PROFILER_REDIS=keys` puts the whole
 
 Tag traffic (`SADD`, `SREM`, `SUNION`, `SINTER`) is included, and some of it fires outside any `load`/`save` window — deferred writes are committed on shutdown — so a few command rows legitimately have no cache-operation parent.
 
-Switch it off with `MAGE_PROFILER_REDIS=0`; `MAGE_PROFILER_CACHE=0` drops the frontend rows as well.
+`MAGE_PROFILER_REDIS` is unset by default, which means off. `1`, `on`, `true`, `yes` or `keys` turn the command rows on; `MAGE_PROFILER_CACHE=0` drops the frontend rows as well.
+
+#### What Was On The Wire
+
+With the command rows on, each one also carries the command it ran, shown on click in the admin viewer exactly as a captured SQL statement is:
+
+```
+REDIS:MGET (BLOCK)          MGET 69d_:BLOCK_9a8b7c 69d_:BLOCK_1f2e3d
+REDIS:SADD (CACHE_ALL_IDS)  SADD cache:all_ids GLOBAL__RESOURCESCACHE
+REDIS:SETEX (BLOCK)         SETEX 69d_:BLOCK_9a8b7c 7200
+                            └ value: <igbinary 668.9 KB>
+```
+
+Keys and set members are written in full — they are identifiers, and they are the answer to *which* keys a command touched, which the key family in the timer id deliberately drops. Value arguments are separated out and bounded: readable payloads are cut at 96 characters, and a serialized or compressed one is reported by encoding and size rather than content, because Magento's Redis backend serializes and compresses above `compress_threshold` and a raw payload in a log file is unreadable at best and a terminal escape sequence at worst.
+
+The command line is only assembled when a `json` / `timeline` run is recording — a `tabular` run has no column for it and pays nothing. A command line is capped at 2 KB, arguments at 24, and the whole request at 256 KB, after which capture stops.
+
+Treat a report recorded this way as sensitive: the values are fragments of whatever is in the cache, and the cache holds rendered blocks. See [Security](#security).
 
 One core quirk worth knowing, because it is visible in every 2.4.9 profile: `App\Cache\Frontend\Factory` applies its decorator list **twice** — once inside `createSymfonyCache()` (`Factory.php:595`) and again in `create()` (`:196`) — so every configured cache decorator is built wrapping itself. Magento's own `Decorator\Profiler` shows the symptom as `cache_load` nested inside `cache_load`. This module detects the duplicate and makes the outer instance a pass-through, so cache operations are reported once, by the instance closest to the backend.
 
 Two things to know before reading the numbers:
 
 * **Time overlaps between the layers.** `REDIS:MGET` runs *inside* `REDIS:load`, so the same milliseconds appear in both rows and the `%` column can sum past 100. That is ordinary inclusive-time behaviour — the Self column in the admin viewer is what separates them.
-* **Volume.** A cache-cold page can issue hundreds of commands, and each one is a span. With the default `MAGE_PROFILER_MAX_SPANS=5000` a Redis-heavy request will hit the cap and the Timeline will truncate; raise the cap or set `MAGE_PROFILER_REDIS=0` when you are profiling something else.
+* **Volume.** A cache-cold page can issue hundreds of commands, and each one is a span. With the default `MAGE_PROFILER_MAX_SPANS=5000` a Redis-heavy request will hit the cap and the Timeline will truncate; raise the cap, or simply leave `MAGE_PROFILER_REDIS` unset when you are profiling something else. This is the reason the area is opt-in.
 
 Only the **cache** client is instrumented. Session Redis traffic goes through a Credis client that Magento constructs with no injection point of any kind, so it stays behind the single `SESSION:read` / `SESSION:write` timers.
 
 ### The Quiet Costs
 
-Five subsystems that spend real time and report none of it anywhere else.
+Subsystems that spend real time and report none of it anywhere you would look.
 
 ```
 HTTP:POST (gateway.example.com)     1    842.106 ms   <- payment gateway, via the Zend transport
@@ -276,6 +325,10 @@ IMAGE:resize (Gd2)                  1     14.218 ms
 MAIL:send (Model\Transport)         1    311.400 ms   <- inside the request that placed the order
 QUEUE:publish (product_action_attribute.update)
 QUEUE:consume (Consumer)
+
+CLI:cron:run                        1   1145.267 ms
+ |- CRON:catalog_index_refresh_price      1      4.796 ms
+ |- CRON:sales_clean_orders               1      8.392 ms   <- 29 jobs, not one opaque row
 ```
 
 | Area | What it covers | Env |
@@ -286,6 +339,7 @@ QUEUE:consume (Consumer)
 | `IMAGE:` | GD / ImageMagick work. The first uncached view of a category page generates every thumbnail it shows | `MAGE_PROFILER_IMAGE` |
 | `MAIL:` | `TransportInterface::sendMessage`. Transactional mail is sent synchronously, so a slow relay is charged to the customer | `MAGE_PROFILER_MAIL` |
 | `QUEUE:` | Publishing and consuming. Consumers are long-running CLI processes — the workload most worth profiling, and the one whose SQL previously had nothing to attribute it to | `MAGE_PROFILER_QUEUE` |
+| `CRON:` | Each cron job separately. Core does time them — against a private `Stat` that it JSON-logs and never routes through `\Magento\Framework\Profiler`, so `cron:run` otherwise profiles as one opaque row with an entire run hidden inside it | `MAGE_PROFILER_CLI` |
 
 Details stay bounded the same way everywhere: hosts without query strings, adapters rather than file paths, transports rather than recipients, and lock names through the cache-key family reduction — Magento locks per cache entry and per price context, so the raw names are per-entity.
 
@@ -374,12 +428,19 @@ These control the **output** only — they cannot switch profiling on. Environme
 | Timer Id Filter (PCRE) | `MAGE_PROFILER_FILTER` | none |
 | Print To STDERR On CLI | `MAGE_PROFILER_CLI_STDERR` | Yes |
 
-Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `operation` for no table names, `query` to capture the statement), `MAGE_PROFILER_REDIS`, `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_SQL_MAXLEN`, `MAGE_PROFILER_SQL_BUDGET`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
+Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `operation` for no table names, `query` to capture the statement), `MAGE_PROFILER_REDIS` (**opt-in** — unset means off; `1` for wire commands and their captured command line, `keys` to also put the raw key in the id), `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_SQL_MAXLEN`, `MAGE_PROFILER_SQL_BUDGET`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
 
 ## Security
 
 This extension is intended for development and staging environments. The gates below exist to
 contain the damage of a production run, not to make one safe.
+
+`MAGE_PROFILER_REDIS=1` writes the **command line of every Redis command**, keys and set members
+included, and a bounded fragment of each value argument. The cache holds rendered blocks, so those
+fragments can carry customer names, addresses and cart contents. Serialized and compressed payloads
+are reported by encoding and size rather than content, which on a stock install is most of them - but
+that is a property of how Magento stores the data, not a redaction, and it does not hold for a store
+with compression off. The area is off unless asked for, and the same handling applies as below.
 
 `MAGE_PROFILER_SQL=query` writes the statement **and its bound values** into the report. Those values
 routinely include customer data - email addresses, names, tokens. No redaction is attempted, because
@@ -419,7 +480,22 @@ live run:
 
 ### What gets instrumented
 
-Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Framework\App\ActionInterface`, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\Profiler\Driver\Standard\Stat`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+
+Two of those need a word of explanation.
+
+`ActionInterface` is wrapped on the interface, so every controller is timed as
+`CONTROLLER:<full action name>`. Controllers still extending the deprecated
+`Magento\Framework\App\Action\Action` base class are skipped deliberately: core already times
+those itself as `CONTROLLER_ACTION:`, and wrapping both would report the same work twice under two
+names.
+
+`Stat` is not instrumentation of the profiler - it is how cron timings are recovered.
+`Cron\Observer\ProcessCronQueueObserver` measures every job against its own `Stat` instance and
+writes the result out as JSON, so none of it reaches `\Magento\Framework\Profiler`. The plugin
+mirrors those `job <code>` timers in as `CRON:<code>`. Note that it therefore fires for *every*
+timer this module records, its own included; a `strncmp` against cron's prefix is what keeps that
+cheap and what stops the mirroring recursing.
 
 ### Static analysis
 
@@ -431,6 +507,14 @@ vendor/bin/phpcs --standard=Magento2 --extensions=php,phtml app/code/MagePsycho/
 Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin, the OpenSearch client plugin and the benchmark helper.
 
 ## Changelog
+
+**Version 1.0.4 (2026-08-30)**
+
+* Redis wire commands are now **opt-in**: `MAGE_PROFILER_REDIS` unset means off, where it used to mean on. Every command nests inside the cache row that issued it, so on by default meant each report carried a second, finer copy of what the `REDIS:load` and `REDIS:save` rows above already said - hundreds of extra spans on a cache-cold page, for a question most runs were not asking. `MAGE_PROFILER_REDIS=1` asks for them; the frontend rows are unaffected and stay on under `MAGE_PROFILER_CACHE`.
+* With them on, each command row now carries the command it ran - keys and set members in full, value arguments bounded and, when serialized or compressed, reported by encoding and size. The admin viewer shows it on click through the same popup as a captured SQL statement. Assembled only when a `json` / `timeline` run is recording, capped at 2 KB per command and 256 KB per request.
+
+* `CONTROLLER:<full action name>` times controller dispatch. Core only times the deprecated `Action` base class, so controllers implementing `ActionInterface` directly - the modern majority, and every Hyva controller - had no timer between the root `magento` row and the SQL underneath it. Legacy actions are left to core so nothing is counted twice. No area flag: it is one timer per request.
+* `CRON:<job code>` times individual cron jobs. Core already measures them, but against a private `Stat` whose result is JSON-logged and never reaches the profiler, so `bin/magento cron:run` profiled as one opaque `CLI:cron:run` row. Gated on `MAGE_PROFILER_CLI` alongside its parent row.
 
 **Version 1.0.3 (2026-08-18)**
 

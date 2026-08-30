@@ -18,6 +18,7 @@ declare(strict_types=1);
 namespace MagePsycho\Profiler\Model\Cache;
 
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
+use MagePsycho\Profiler\Model\Instrumentation\RedisCapture;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
@@ -78,6 +79,13 @@ class ProfiledRedisInstaller
     private $timerId;
 
     /**
+     * One per installer, so the per-request capture budget is shared by every command on the client.
+     *
+     * @var RedisCapture
+     */
+    private $capture;
+
+    /**
      * @var Settings
      */
     private $settings;
@@ -93,6 +101,7 @@ class ProfiledRedisInstaller
         $this->guard    = new Guard($settings);
         $this->timer    = new Timer();
         $this->timerId  = new TimerId($settings);
+        $this->capture  = new RedisCapture();
     }
 
     /**
@@ -246,7 +255,7 @@ class ProfiledRedisInstaller
         $this->copyOptions($client, $profiled);
 
         /* Last: the connect and select above belong to the caller's timer, not to a REDIS: row. */
-        $profiled->setProfiler($this->guard, $this->timer, $this->timerId, $this->settings);
+        $profiled->setProfiler($this->guard, $this->timer, $this->timerId, $this->settings, $this->capture);
 
         return $profiled;
     }

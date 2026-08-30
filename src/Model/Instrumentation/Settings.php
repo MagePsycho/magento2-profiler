@@ -37,6 +37,7 @@ class Settings
     public const AREA_SESSION = 'SESSION';
     public const AREA_HTTP    = 'HTTP';
     public const AREA_SEARCH  = 'SEARCH';
+    /** Opt-in - see OPT_IN. */
     public const AREA_REDIS   = 'REDIS';
     public const AREA_FPC     = 'FPC';
     public const AREA_LOCK    = 'LOCK';
@@ -47,6 +48,20 @@ class Settings
     private const ENV_PREFIX = 'MAGE_PROFILER_';
 
     private const FALSY = ['0', 'false', 'off', 'no'];
+
+    /**
+     * Areas that stay off until asked for, rather than on until switched off.
+     *
+     * REDIS is the only one. It is the only area whose timers sit *below* another area's - every
+     * wire command nests inside the CACHE row that issued it - so leaving it on by default filled
+     * a report with a second, finer copy of information it already had. A cache-cold page issues
+     * hundreds of commands, each one a span, and the useful signal (which cache type, how long)
+     * was already in the REDIS:load and REDIS:save rows above them.
+     *
+     * Turning it on is therefore a deliberate act: MAGE_PROFILER_REDIS=1 when the question is
+     * specifically "what is this frontend call actually doing on the wire".
+     */
+    private const OPT_IN = [self::AREA_REDIS];
 
     /**
      * Resolved env values, keyed by variable name.
@@ -65,7 +80,7 @@ class Settings
     {
         $value = $this->getRaw(self::ENV_PREFIX . $area);
         if ($value === null || $value === '') {
-            return true;
+            return !in_array($area, self::OPT_IN, true);
         }
 
         return !in_array(strtolower($value), self::FALSY, true);
