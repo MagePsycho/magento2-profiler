@@ -136,6 +136,35 @@ Cookie: MAGE_PROFILER=tabular,json:<secret>
 
 Store configuration cannot switch profiling on: activation happens during bootstrap, long before store config is readable. The admin settings control the **output** only.
 
+### Every Request Type Gets A Root
+
+Nesting is only useful if something sits at the top of it. Core opens one root timer, `magento`, for
+web requests and nothing at all for the console, so a CLI profile used to be a flat list of unrelated
+roots and a storefront profile had `magento` and then a thousand-row drop straight to individual
+queries.
+
+Each entry point now reports its own row, and everything else hangs underneath it:
+
+```
+CLI:indexer:reindex                             bin/magento, by command name
+WEBAPI:GET /V1/products/:sku                    REST, by matched route template
+GRAPHQL:query (getProducts)                     GraphQL, by operation name
+CONTROLLER:checkout_index_index                 storefront and adminhtml, by full action name
+```
+
+`CONTROLLER:` is wired on `ActionInterface`, so it covers every controller — **including the ones core
+does not time.** Core only times controllers extending the deprecated `Magento\Framework\App\Action\Action`
+base class, which emits `CONTROLLER_ACTION:` from its own `dispatch()`. Anything implementing
+`ActionInterface` directly — the modern majority, and every Hyvä controller — went through
+`FrontController::processRequest`, which has no per-action timer at all.
+
+Controllers that *do* extend the legacy base class are skipped deliberately, so core keeps them and
+the same work is never reported twice under two names. A profile therefore shows `CONTROLLER:` or
+`CONTROLLER_ACTION:` for a given page, never both.
+
+There is no area flag for it. One timer per request is too cheap to be worth a switch, and it is the
+row every other row hangs from.
+
 ### SQL Query Profiling
 
 Every query is timed and grouped, so a slow reindex shows which tables it is spending its time in rather than one opaque total.
@@ -284,7 +313,7 @@ Only the **cache** client is instrumented. Session Redis traffic goes through a 
 
 ### The Quiet Costs
 
-Five subsystems that spend real time and report none of it anywhere else.
+Subsystems that spend real time and report none of it anywhere you would look.
 
 ```
 HTTP:POST (gateway.example.com)     1    842.106 ms   <- payment gateway, via the Zend transport
@@ -296,6 +325,10 @@ IMAGE:resize (Gd2)                  1     14.218 ms
 MAIL:send (Model\Transport)         1    311.400 ms   <- inside the request that placed the order
 QUEUE:publish (product_action_attribute.update)
 QUEUE:consume (Consumer)
+
+CLI:cron:run                        1   1145.267 ms
+ |- CRON:catalog_index_refresh_price      1      4.796 ms
+ |- CRON:sales_clean_orders               1      8.392 ms   <- 29 jobs, not one opaque row
 ```
 
 | Area | What it covers | Env |
@@ -306,6 +339,7 @@ QUEUE:consume (Consumer)
 | `IMAGE:` | GD / ImageMagick work. The first uncached view of a category page generates every thumbnail it shows | `MAGE_PROFILER_IMAGE` |
 | `MAIL:` | `TransportInterface::sendMessage`. Transactional mail is sent synchronously, so a slow relay is charged to the customer | `MAGE_PROFILER_MAIL` |
 | `QUEUE:` | Publishing and consuming. Consumers are long-running CLI processes — the workload most worth profiling, and the one whose SQL previously had nothing to attribute it to | `MAGE_PROFILER_QUEUE` |
+| `CRON:` | Each cron job separately. Core does time them — against a private `Stat` that it JSON-logs and never routes through `\Magento\Framework\Profiler`, so `cron:run` otherwise profiles as one opaque row with an entire run hidden inside it | `MAGE_PROFILER_CLI` |
 
 Details stay bounded the same way everywhere: hosts without query strings, adapters rather than file paths, transports rather than recipients, and lock names through the cache-key family reduction — Magento locks per cache entry and per price context, so the raw names are per-entity.
 
