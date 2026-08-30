@@ -65,7 +65,8 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * Captures aggregate rows **and** per-call spans, so a timeline is available without deciding before the run
 * **SQL query profiling** on by default, with a per-table breakdown of every query
 * **OpenSearch profiling** per operation and index, covering the reindex path the search adapter never sees
-* Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, indexers, mview, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
+* Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, controller dispatch, indexers, mview, cron jobs, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
+* **Per-job cron timing.** Core measures each job against a private stat object and writes it out as JSON; this surfaces it in the same report as everything the job did
 * Thresholds default to **zero** — core's `html` output hides everything under 1ms / 10 calls / 10KB, which drops most of an API request
 * Filter noise by minimum duration or by PCRE on the timer id
 * Log output is confined to `var/log/` and forced to a `.log` extension, so a report can never land somewhere web-served or executable
@@ -419,7 +420,22 @@ live run:
 
 ### What gets instrumented
 
-Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Framework\App\ActionInterface`, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\Profiler\Driver\Standard\Stat`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+
+Two of those need a word of explanation.
+
+`ActionInterface` is wrapped on the interface, so every controller is timed as
+`CONTROLLER:<full action name>`. Controllers still extending the deprecated
+`Magento\Framework\App\Action\Action` base class are skipped deliberately: core already times
+those itself as `CONTROLLER_ACTION:`, and wrapping both would report the same work twice under two
+names.
+
+`Stat` is not instrumentation of the profiler - it is how cron timings are recovered.
+`Cron\Observer\ProcessCronQueueObserver` measures every job against its own `Stat` instance and
+writes the result out as JSON, so none of it reaches `\Magento\Framework\Profiler`. The plugin
+mirrors those `job <code>` timers in as `CRON:<code>`. Note that it therefore fires for *every*
+timer this module records, its own included; a `strncmp` against cron's prefix is what keeps that
+cheap and what stops the mirroring recursing.
 
 ### Static analysis
 
@@ -431,6 +447,11 @@ vendor/bin/phpcs --standard=Magento2 --extensions=php,phtml app/code/MagePsycho/
 Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id builder, the SQL plugin, the OpenSearch client plugin and the benchmark helper.
 
 ## Changelog
+
+**Version 1.0.4 (2026-08-30)**
+
+* `CONTROLLER:<full action name>` times controller dispatch. Core only times the deprecated `Action` base class, so controllers implementing `ActionInterface` directly - the modern majority, and every Hyva controller - had no timer between the root `magento` row and the SQL underneath it. Legacy actions are left to core so nothing is counted twice. No area flag: it is one timer per request.
+* `CRON:<job code>` times individual cron jobs. Core already measures them, but against a private `Stat` whose result is JSON-logged and never reaches the profiler, so `bin/magento cron:run` profiled as one opaque `CLI:cron:run` row. Gated on `MAGE_PROFILER_CLI` alongside its parent row.
 
 **Version 1.0.3 (2026-08-18)**
 

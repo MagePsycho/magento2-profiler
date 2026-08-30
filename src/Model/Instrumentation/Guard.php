@@ -59,6 +59,20 @@ class Guard
     }
 
     /**
+     * Whether the profiler is recording at all, with no area gate.
+     *
+     * For instrumentation that is part of the module's baseline rather than an opt-out area: a single
+     * timer per request, cheap enough that a switch to turn it off would be a worse trade than the
+     * cost of leaving it on.
+     *
+     * @return bool
+     */
+    public function isProfiling(): bool
+    {
+        return Profiler::isEnabled();
+    }
+
+    /**
      * Claim the area. Returns false when already inside it - the caller must then skip timing.
      *
      * @param string $area

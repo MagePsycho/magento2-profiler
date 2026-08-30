@@ -58,6 +58,27 @@
         <plugin name="magepsycho_profiler_cli" type="MagePsycho\Profiler\Plugin\Console\CliProfiler" sortOrder="10"/>
     </type>
 
+    <!--
+        Per-job cron timing. Cron already measures each job, but against its own Stat instance built
+        from StatFactory, and writes the result out as JSON - none of it reaches \Magento\Framework\Profiler,
+        so bin/magento cron:run profiles as one opaque CLI:cron:run row. Plugging Stat is what cron
+        actually drives, and it is the same seam Adobe's NewRelicReporting\Plugin\StatPlugin uses.
+        Note this fires for every timer the profiler records, its own included; see the plugin.
+    -->
+    <type name="Magento\Framework\Profiler\Driver\Standard\Stat">
+        <plugin name="magepsycho_profiler_cron" type="MagePsycho\Profiler\Plugin\Cron\StatProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Controller dispatch, on the interface. Core only times the deprecated Action base class
+        (CONTROLLER_ACTION:), so controllers implementing ActionInterface directly - the modern
+        majority - have no timer between the root `magento` row and the SQL underneath it. The plugin
+        skips legacy actions so the two never double-count.
+    -->
+    <type name="Magento\Framework\App\ActionInterface">
+        <plugin name="magepsycho_profiler_controller" type="MagePsycho\Profiler\Plugin\App\ActionProfiler" sortOrder="10"/>
+    </type>
+
     <!-- Session persistence: on a Redis backend the read blocks on the session lock. -->
     <type name="Magento\Framework\Session\SaveHandler">
         <plugin name="magepsycho_profiler_session" type="MagePsycho\Profiler\Plugin\Session\SaveHandlerProfiler" sortOrder="10"/>
