@@ -37,6 +37,18 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 +-------------------------------------------------------+-----+-----------+----------+--------------+--------------+------+
 ```
 
+> [!WARNING]
+> **Development and staging use only — not for production.**
+>
+> Every profiled request pays instrumentation overhead on the DB adapter, search client,
+> Redis commands and cache frontend. `var/log/profiler_tabular.log` appends forever and has
+> no rotation of its own. With `MAGE_PROFILER_SQL=query`, bound values — customer emails,
+> names, tokens — are written to disk unredacted.
+>
+> Profile a production issue on a staging copy. If a live run is unavoidable, scope it to a
+> single CLI command or one cookie-gated session, then verify
+> `bin/magento magepsycho:profiler:status` reports the gate closed. See [Security](#security).
+
 ## Demo
 
 `tabular` output on a CLI command:
@@ -366,6 +378,9 @@ Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `opera
 
 ## Security
 
+This extension is intended for development and staging environments. The gates below exist to
+contain the damage of a production run, not to make one safe.
+
 `MAGE_PROFILER_SQL=query` writes the statement **and its bound values** into the report. Those values
 routinely include customer data - email addresses, names, tokens. No redaction is attempted, because
 positional binds carry no column name and any heuristic would be theatre. Treat a report recorded
@@ -381,7 +396,20 @@ Otherwise the cookie is ignored outright. `MAGE_PROFILER` env-var and `var/profi
 
 The report path is **always confined to `var/log/`** and always written with a `.log` extension: traversal segments are dropped and anything outside is folded back in, so a mistyped or hostile path cannot put the report somewhere web-served or executable. Request query strings are stripped from the report label by default, since API calls routinely carry tokens in them (`MAGE_PROFILER_KEEP_QUERY=1` to keep them).
 
-*Production checklist: leave `MAGE_PROFILER_SECRET` unset unless actively profiling, never leave `var/profiler.flag` behind, and rotate `var/log/profiler_tabular.log` — it appends forever and has no rotation of its own. `bin/magento magepsycho:profiler:status` prints the current gate state.*
+### Production checklist
+
+If the profiler is installed on a production store, it should be dormant. Before and after any
+live run:
+
+* Leave `MAGE_PROFILER_SECRET` unset unless actively profiling — an unset secret means the
+  cookie is ignored outright outside developer mode.
+* Never leave `var/profiler.flag` behind. It arms *every* request until removed.
+* Keep `MAGE_PROFILER_SQL` off, or at `operation`. Only `query` writes bound values to disk.
+* Rotate `var/log/profiler_tabular.log` — it appends forever and has no rotation of its own.
+  An unattended flag file plus no rotation will fill the disk.
+* Remember that instrumentation is not free: the DB adapter, search client, Redis commands and
+  cache frontend are all wrapped while profiling is armed.
+* Verify with `bin/magento magepsycho:profiler:status`, which prints the current gate state.
 
 ## Developer Notes
 
