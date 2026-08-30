@@ -67,6 +67,7 @@ Timers: 19 | Calls: 21 | Root time: 73.567 ms | Peak real: 11.96 MB | Peak emall
 * **OpenSearch profiling** per operation and index, covering the reindex path the search adapter never sees
 * Times DB, search, HTTP clients and the gateway transport, GraphQL resolvers, Web API, controller dispatch, indexers, mview, cron jobs, session handler, cache frontend, individual Redis commands, lock waits, image manipulation, mail sending, message queues and console commands
 * **Per-job cron timing.** Core measures each job against a private stat object and writes it out as JSON; this surfaces it in the same report as everything the job did
+* **Checkout arithmetic** — totals collection per collector, shipping rates per carrier, cart price rules per rule id: the place a real store's checkout time actually goes, and the one thing a wall of SQL rows never names
 * Thresholds default to **zero** — core's `html` output hides everything under 1ms / 10 calls / 10KB, which drops most of an API request
 * Filter noise by minimum duration or by PCRE on the timer id
 * Log output is confined to `var/log/` and forced to a `.log` extension, so a report can never land somewhere web-served or executable
@@ -343,6 +344,45 @@ CLI:cron:run                        1   1145.267 ms
 
 Details stay bounded the same way everywhere: hosts without query strings, adapters rather than file paths, transports rather than recipients, and lock names through the cache-key family reduction — Magento locks per cache entry and per price context, so the raw names are per-entity.
 
+### Checkout Arithmetic
+
+The first area here that instruments Magento's own application rather than the infrastructure under
+it. Everything else times something Magento *talks to* — a database, a cache, a search engine, an HTTP
+endpoint. This times what checkout does with the answers, which on a real store is where the time goes.
+
+```
+TOTALS:collectAddressTotals              1    412.663 ms
+ |- TOTALS:Quote\Subtotal                 1      8.104 ms
+ |- TOTALS:Quote\Shipping                 1    311.229 ms
+ |   |- SHIPPING:collectRates             1    309.870 ms
+ |       |- SHIPPING:collectCarrierRates (ups)        1   298.114 ms   <- one carrier, most of the checkout
+ |       |- SHIPPING:collectCarrierRates (flatrate)   1     2.947 ms
+ |       |- SHIPPING:collectCarrierRates (tablerate)  1     2.951 ms
+ |- TOTALS:Quote\Discount                 1     71.402 ms
+ |   |- RULE:process (12)                24     58.113 ms   <- 24 = rules x items
+ |   |- RULE:process (3)                 24      9.556 ms
+ |- TOTALS:Quote\Weee                     1      0.284 ms
+```
+
+Three reasons this is worth its own area:
+
+* **Totals collection runs on every quote change** — every qty edit, every address change, every
+  coupon attempt — and collectors run in sequence from `sales.xml`, so one slow third-party collector
+  is charged to a page that looks like it is doing nothing. The per-collector row names it.
+* **A live carrier is an HTTP call inside the request, while the customer waits.** `HTTP:` already
+  reports that call, but by *host* — and a rate aggregator answers for several carriers on one host.
+  The carrier code is what tells you which one to switch off.
+* **Rule evaluation is rules × items.** A store that has accumulated forty rules over a few years pays
+  for all forty on every totals collection. The rule id in the detail is what lets one row be traced
+  back to one row in the admin grid; rule *names* are admin-entered free text and never reach the id.
+
+Switch the whole area off with `MAGE_PROFILER_CHECKOUT=0`.
+
+Totals are hooked at two levels, and the per-collector plugin is wired on
+`Quote\Address\Total\CollectorInterface` rather than on `AbstractTotal`: a collector is only required
+to implement the interface, and the ones that skip the abstract class are third-party — exactly the
+ones worth timing.
+
 ### Timeline And The Admin Viewer
 
 The `json` output writes one file per run into `var/log/profiler/`, indexed by `index.jsonl` so a run picker can be built without opening every report.
@@ -428,7 +468,7 @@ These control the **output** only — they cannot switch profiling on. Environme
 | Timer Id Filter (PCRE) | `MAGE_PROFILER_FILTER` | none |
 | Print To STDERR On CLI | `MAGE_PROFILER_CLI_STDERR` | Yes |
 
-Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `operation` for no table names, `query` to capture the statement), `MAGE_PROFILER_REDIS` (**opt-in** — unset means off; `1` for wire commands and their captured command line, `keys` to also put the raw key in the id), `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_SQL_MAXLEN`, `MAGE_PROFILER_SQL_BUDGET`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
+Instrumentation itself is environment-only: `MAGE_PROFILER_SQL` (`0` off, `operation` for no table names, `query` to capture the statement), `MAGE_PROFILER_REDIS` (**opt-in** — unset means off; `1` for wire commands and their captured command line, `keys` to also put the raw key in the id), `MAGE_PROFILER_LOCK`, `MAGE_PROFILER_FPC`, `MAGE_PROFILER_MAIL`, `MAGE_PROFILER_IMAGE`, `MAGE_PROFILER_QUEUE`, `MAGE_PROFILER_CHECKOUT`, `MAGE_PROFILER_SEARCH` (`0` off, `operation` for no index names), `MAGE_PROFILER_SQL_MAXLEN`, `MAGE_PROFILER_SQL_BUDGET`, `MAGE_PROFILER_MAX_DETAIL`, `MAGE_PROFILER_MAX_IDS`, `MAGE_PROFILER_MAX_SPANS`, `MAGE_PROFILER_REPORT_DIR`, `MAGE_PROFILER_KEEP_DAYS`, `MAGE_PROFILER_KEEP_QUERY`.
 
 ## Security
 
@@ -480,7 +520,7 @@ live run:
 
 ### What gets instrumented
 
-Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Framework\App\ActionInterface`, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\Profiler\Driver\Standard\Stat`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
+Plugins wrap `Magento\Framework\DB\Adapter\Pdo\Mysql`, `Magento\Framework\Search\AdapterInterface`, `Magento\OpenSearch\Model\SearchClient`, `Magento\Framework\HTTP\Client\Curl`, `Magento\Framework\HTTP\AsyncClientInterface`, the GraphQL query processor and resolvers, the Web API request and output processors, `Magento\Framework\App\ActionInterface`, `Magento\Quote\Model\Quote\TotalsCollector`, `Magento\Quote\Model\Quote\Address\Total\CollectorInterface`, `Magento\Shipping\Model\Shipping`, `Magento\SalesRule\Model\Validator`, `Magento\Indexer\Model\Indexer`, `Magento\Framework\Mview\ActionInterface`, `Magento\Framework\Session\SaveHandler`, `Magento\Framework\Profiler\Driver\Standard\Stat`, `Magento\Framework\App\Cache\Frontend\Factory` and `Symfony\Component\Console\Command\Command`.
 
 Two of those need a word of explanation.
 
@@ -509,6 +549,8 @@ Unit tests live in `Test/Unit` and cover the tabular renderer, the timer id buil
 ## Changelog
 
 **Version 1.0.4 (2026-08-30)**
+
+* New `CHECKOUT` area: `TOTALS:<collector>`, `SHIPPING:collectCarrierRates (<carrier>)` and `RULE:process (<rule id>)`. The first instrumentation here that measures Magento's own application rather than the infrastructure under it, and the place a real store's checkout time goes. Totals are hooked at two levels - the whole pass and each collector - with the per-collector plugin on `CollectorInterface` so third-party collectors that skip `AbstractTotal` are still timed. Off with `MAGE_PROFILER_CHECKOUT=0`.
 
 * Redis wire commands are now **opt-in**: `MAGE_PROFILER_REDIS` unset means off, where it used to mean on. Every command nests inside the cache row that issued it, so on by default meant each report carried a second, finer copy of what the `REDIS:load` and `REDIS:save` rows above already said - hundreds of extra spans on a cache-cold page, for a question most runs were not asking. `MAGE_PROFILER_REDIS=1` asks for them; the frontend rows are unaffected and stay on under `MAGE_PROFILER_CACHE`.
 * With them on, each command row now carries the command it ran - keys and set members in full, value arguments bounded and, when serialized or compressed, reported by encoding and size. The admin viewer shows it on click through the same popup as a captured SQL statement. Assembled only when a `json` / `timeline` run is recording, capped at 2 KB per command and 256 KB per request.

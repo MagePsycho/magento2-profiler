@@ -79,6 +79,41 @@
         <plugin name="magepsycho_profiler_controller" type="MagePsycho\Profiler\Plugin\App\ActionProfiler" sortOrder="10"/>
     </type>
 
+    <!--
+        Checkout arithmetic. The first area here that instruments Magento's own application rather than
+        the infrastructure under it, and the place a real store spends its checkout time.
+
+        Totals are hooked at two levels: the whole pass, and each collector. The per-collector plugin
+        is on CollectorInterface rather than AbstractTotal because a collector is only required to
+        implement the interface, and the ones that skip the abstract class are third-party - exactly
+        the ones worth timing.
+
+        Two plugin classes, not one with two methods: Magento matches plugin methods by name against
+        the type the plugin is declared on, and TotalsCollector has a collect() of its own with an
+        unrelated signature - so a single class serving both types gets aroundCollect() applied to
+        both, and the wrong one fatals on the type hint.
+    -->
+    <type name="Magento\Quote\Model\Quote\TotalsCollector">
+        <plugin name="magepsycho_profiler_totals" type="MagePsycho\Profiler\Plugin\Checkout\TotalsProfiler" sortOrder="10"/>
+    </type>
+    <type name="Magento\Quote\Model\Quote\Address\Total\CollectorInterface">
+        <plugin name="magepsycho_profiler_total_collector" type="MagePsycho\Profiler\Plugin\Checkout\TotalCollectorProfiler" sortOrder="10"/>
+    </type>
+
+    <!--
+        Rate collection runs every carrier in sequence, and a live one is an HTTP call inside the
+        request. HTTP: already reports that call, but by host - and a rate aggregator answers for
+        several carriers on one host, so the carrier code is what says which to switch off.
+    -->
+    <type name="Magento\Shipping\Model\Shipping">
+        <plugin name="magepsycho_profiler_shipping" type="MagePsycho\Profiler\Plugin\Checkout\ShippingProfiler" sortOrder="10"/>
+    </type>
+
+    <!-- Every active rule against every quote item, plus a second pass for shipping discounts. -->
+    <type name="Magento\SalesRule\Model\Validator">
+        <plugin name="magepsycho_profiler_salesrule" type="MagePsycho\Profiler\Plugin\Checkout\SalesRuleProfiler" sortOrder="10"/>
+    </type>
+
     <!-- Session persistence: on a Redis backend the read blocks on the session lock. -->
     <type name="Magento\Framework\Session\SaveHandler">
         <plugin name="magepsycho_profiler_session" type="MagePsycho\Profiler\Plugin\Session\SaveHandlerProfiler" sortOrder="10"/>

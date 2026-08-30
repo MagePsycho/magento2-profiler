@@ -129,7 +129,7 @@
      */
     $promotable = $cookiesTrusted ? [
         'SQL', 'WEBAPI', 'GRAPHQL', 'INDEXER', 'CLI', 'CACHE', 'SESSION', 'HTTP', 'SEARCH',
-        'REDIS', 'FPC', 'LOCK', 'MAIL', 'IMAGE', 'QUEUE', 'SQL_MAXLEN', 'SQL_BUDGET',
+        'REDIS', 'FPC', 'LOCK', 'MAIL', 'IMAGE', 'QUEUE', 'CHECKOUT', 'SQL_MAXLEN', 'SQL_BUDGET',
     ] : [];
 
     foreach ($promotable as $flag) {

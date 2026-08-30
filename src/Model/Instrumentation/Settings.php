@@ -45,6 +45,16 @@ class Settings
     public const AREA_IMAGE   = 'IMAGE';
     public const AREA_QUEUE   = 'QUEUE';
 
+    /**
+     * Quote totals, shipping rate collection and cart price rules.
+     *
+     * The first area that instruments the *application* rather than the infrastructure under it.
+     * Everything else here times a thing Magento talks to - a database, a cache, a search engine, an
+     * HTTP endpoint. This times Magento's own checkout arithmetic, which on a real store is where the
+     * time goes and which a wall of SQL rows never names.
+     */
+    public const AREA_CHECKOUT = 'CHECKOUT';
+
     private const ENV_PREFIX = 'MAGE_PROFILER_';
 
     private const FALSY = ['0', 'false', 'off', 'no'];
