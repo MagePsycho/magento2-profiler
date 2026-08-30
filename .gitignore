@@ -1,0 +1,11 @@
+# Release zips produced by the packaging script.
+/dist/
+
+# PHPUnit's result cache, written next to src/phpunit.xml.dist by the module's own suite.
+/src/.phpunit.cache/
+
+# The CI coding-standard step installs magento/magento-coding-standard into the module root
+# (src/ is the `path` the check-extension workflow is pointed at), so a vendor tree can appear
+# there after running the same command locally.
+/src/vendor/
+/src/composer.lock
