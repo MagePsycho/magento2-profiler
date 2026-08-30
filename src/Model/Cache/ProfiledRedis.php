@@ -18,6 +18,8 @@ declare(strict_types=1);
 namespace MagePsycho\Profiler\Model\Cache;
 
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
+use MagePsycho\Profiler\Model\Instrumentation\RedisCapture;
+use MagePsycho\Profiler\Model\Profiler\Driver\Timeline;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
@@ -73,6 +75,11 @@ class ProfiledRedis extends \Redis
     private $timerId;
 
     /**
+     * @var RedisCapture|null
+     */
+    private $capture;
+
+    /**
      * Collaborators arrive through setters, not the constructor: \Redis::__construct() takes its own
      * arguments and the plugin constructs this the way phpredis expects.
      *
@@ -80,14 +87,21 @@ class ProfiledRedis extends \Redis
      * @param Timer $timer
      * @param TimerId $timerId
      * @param Settings $settings
+     * @param RedisCapture $capture
      * @return void
      */
-    public function setProfiler(Guard $guard, Timer $timer, TimerId $timerId, Settings $settings): void
-    {
+    public function setProfiler(
+        Guard $guard,
+        Timer $timer,
+        TimerId $timerId,
+        Settings $settings,
+        RedisCapture $capture
+    ): void {
         $this->guard    = $guard;
         $this->timer    = $timer;
         $this->timerId  = $timerId;
         $this->settings = $settings;
+        $this->capture  = $capture;
     }
 
     /**
@@ -98,7 +112,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('connect', function () use ($args) {
             return parent::connect(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -109,7 +123,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('pconnect', function () use ($args) {
             return parent::pconnect(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -120,7 +134,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('GET', function () use ($args) {
             return parent::get(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -131,7 +145,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('MGET', function () use ($args) {
             return parent::mget(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -142,7 +156,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SET', function () use ($args) {
             return parent::set(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -155,7 +169,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SETEX', function () use ($args) {
             return parent::setex(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -166,7 +180,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('DEL', function () use ($args) {
             return parent::del(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -177,7 +191,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('UNLINK', function () use ($args) {
             return parent::unlink(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -188,7 +202,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('EXPIRE', function () use ($args) {
             return parent::expire(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -199,7 +213,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('TTL', function () use ($args) {
             return parent::ttl(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -210,7 +224,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('EVAL', function () use ($args) {
             return parent::eval(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -221,7 +235,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('EVALSHA', function () use ($args) {
             return parent::evalsha(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -235,7 +249,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('MULTI', function () use ($args) {
             return parent::multi(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -246,7 +260,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('EXEC', function () use ($args) {
             return parent::exec(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -257,7 +271,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SELECT', function () use ($args) {
             return parent::select(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -268,7 +282,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('INFO', function () use ($args) {
             return parent::info(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -279,7 +293,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('FLUSHDB', function () use ($args) {
             return parent::flushdb(...$args);
-        });
+        }, null, $args);
     }
 
     /**
@@ -290,7 +304,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SADD', function () use ($args) {
             return parent::sadd(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -301,7 +315,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SREM', function () use ($args) {
             return parent::srem(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -312,7 +326,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SMEMBERS', function () use ($args) {
             return parent::smembers(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -323,7 +337,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SUNION', function () use ($args) {
             return parent::sunion(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -334,7 +348,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SINTER', function () use ($args) {
             return parent::sinter(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -345,7 +359,7 @@ class ProfiledRedis extends \Redis
     {
         return $this->profile('SDIFF', function () use ($args) {
             return parent::sdiff(...$args);
-        }, $args[0] ?? null);
+        }, $args[0] ?? null, $args);
     }
 
     /**
@@ -355,9 +369,10 @@ class ProfiledRedis extends \Redis
      * @param string $command
      * @param callable $callback
      * @param string|string[]|null $key The key the command acts on, when it acts on one.
+     * @param array<int, mixed> $args Everything the caller passed, for the span payload.
      * @return mixed
      */
-    private function profile(string $command, callable $callback, $key = null)
+    private function profile(string $command, callable $callback, $key = null, array $args = [])
     {
         if ($this->guard === null
             || $this->timer === null
@@ -367,10 +382,31 @@ class ProfiledRedis extends \Redis
             return $callback();
         }
 
+        /*
+         * Rendered outside the measured closure, so assembling the line is not charged to the
+         * command's own dur_ms - the same reason QueryProfiler captures before it measures.
+         */
+        $tags = $this->capturesCommand() ? $this->capture->capture($command, $args) : null;
+
         return $this->timer->measure(
             $this->timerId->build(self::PREFIX, $command, $this->timerId->cacheKey($key, $this->wantsRawKeys())),
-            $callback
+            $callback,
+            $tags
         );
+    }
+
+    /**
+     * Whether to record the command line on the span.
+     *
+     * Only when something will read it. Under MAGE_PROFILER=tabular the line would be rendered, held
+     * and thrown away - the aggregated report has no column for it - so the Timeline driver announcing
+     * itself is what makes this free in that mode.
+     *
+     * @return bool
+     */
+    private function capturesCommand(): bool
+    {
+        return $this->capture !== null && Timeline::isRecording();
     }
 
     /**

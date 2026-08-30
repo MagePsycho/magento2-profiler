@@ -21,6 +21,7 @@ use Magento\Framework\Profiler;
 use Magento\Framework\Profiler\DriverInterface;
 use MagePsycho\Profiler\Model\Cache\ProfiledRedis;
 use MagePsycho\Profiler\Model\Instrumentation\Guard;
+use MagePsycho\Profiler\Model\Instrumentation\RedisCapture;
 use MagePsycho\Profiler\Model\Instrumentation\Settings;
 use MagePsycho\Profiler\Model\Instrumentation\Timer;
 use MagePsycho\Profiler\Model\Instrumentation\TimerId;
@@ -46,7 +47,9 @@ class ProfiledRedisTest extends TestCase
 
         $this->startedIds = [];
         Profiler::reset();
-        putenv('MAGE_PROFILER_REDIS');
+
+        /* Wire commands are opt-in, so every test that expects one has to ask for it. */
+        putenv('MAGE_PROFILER_REDIS=1');
     }
 
     protected function tearDown(): void
@@ -255,13 +258,38 @@ class ProfiledRedisTest extends TestCase
     }
 
     /**
+     * Wire commands are opt-in.
+     *
+     * They nest inside the CACHE row that issued them, so on by default meant every report carried a
+     * second, finer copy of what the REDIS:load and REDIS:save rows above them already said - hundreds
+     * of spans on a cache-cold page. Unset now means off; MAGE_PROFILER_REDIS=1 asks for them.
+     *
+     * @return void
+     */
+    public function testUnsetRecordsNothing(): void
+    {
+        putenv('MAGE_PROFILER_REDIS');
+        $this->registerDriver();
+
+        $this->call($this->createClient(), 'get', ['CAT_P_828']);
+
+        $this->assertSame([], $this->startedIds);
+    }
+
+    /**
      * @return ProfiledRedis
      */
     private function createClient(): ProfiledRedis
     {
         $settings = new Settings();
         $client   = new ProfiledRedis();
-        $client->setProfiler(new Guard($settings), new Timer(), new TimerId($settings), $settings);
+        $client->setProfiler(
+            new Guard($settings),
+            new Timer(),
+            new TimerId($settings),
+            $settings,
+            new RedisCapture()
+        );
 
         return $client;
     }
