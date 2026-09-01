@@ -14,6 +14,23 @@
 
 </div>
 
+> [!IMPORTANT]
+> **This extension has moved to Mage-OS: [mage-os-lab/module-profiler](https://github.com/mage-os-lab/module-profiler).**
+>
+> It was ported there for wider community adoption, and all further development happens in that repository.
+> Please use the Mage-OS package — this repository is kept for reference only.
+>
+> ```bash
+> composer remove magepsycho/magento2-profiler
+> composer require mage-os/module-profiler
+> bin/magento module:enable MageOS_Profiler
+> bin/magento setup:upgrade
+> ```
+>
+> The module name changes from `MagePsycho_Profiler` to `MageOS_Profiler`; the companion admin UI is now
+> [mage-os-lab/module-profiler-admin-ui](https://github.com/mage-os-lab/module-profiler-admin-ui)
+> (`mage-os/module-profiler-admin-ui`).
+
 ## Overview
 **Magento 2 Enhanced Profiler adds** a **`tabular`** and a **`json`** profiler output type to Magento 2 — a third and fourth option next to the built-in `html` and `csvfile`.
 
